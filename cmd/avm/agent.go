@@ -1,26 +1,6 @@
 package main
 
-import (
-	"fmt"
-
-	"github.com/spf13/cobra"
-)
-
-func addCommands(root *cobra.Command) {
-	root.AddCommand(
-		newInitCommand(),
-		newAgentCommand(),
-		newEnvCommand(),
-		newUseCommand(),
-		newStatusCommand(),
-		newShellCommand(),
-		newDeactivateCommand(),
-	)
-}
-
-func notImplemented(cmd *cobra.Command, args []string) error {
-	return fmt.Errorf("%s: not implemented", cmd.CommandPath())
-}
+import "github.com/spf13/cobra"
 
 func newAgentCommand() *cobra.Command {
 	cmd := &cobra.Command{

@@ -48,17 +48,18 @@ Round 1 合并后的能力基线：
 - Config 层已有 Phase 1 model、YAML read/write/list/validate、round-trip tests。
 - Adapter 层已有 contract、mapping status、fake adapter、render plan normalization。
 - CLI 层已有命令 skeleton，命令可稳定返回 `not implemented`。
+- Lead 已完成 `R2-P0`：`cmd/avm/commands.go` 拥有 root command registration，`cmd/avm/memory.go` 已预注册 `memory import` skeleton。
 - Fixtures 已有 Phase 1 minimal layout。
 
 ### 下一阶段：Round 2 First Vertical Slice
 
-状态：`READY`
+状态：`R2-P0 DONE`
 
 Round 2 不启动 Sync Agent 或 runtime adapter agents。它只打通 AVM source-of-truth 内部路径和 read-only dry-run memory import。
 
 执行顺序：
 
-1. `R2-P0 Lead prep` 串行：整理 CLI 注册边界，避免 Memory Agent 和 Agent CLI 同时改 `cmd/avm/root.go` 或同一个 registration 函数。
+1. `R2-P0 Lead prep` 串行：`DONE`。
 2. `R2-P1 Config Resolve` 并发：实现 `ResolveActivation`、project/global profile lookup、env runtime mapping。
 3. `R2-P2 Agent CLI` 并发：实现 `avm init`、`avm agent create/list/show`、基础 `avm env create`。
 4. `R2-P3 Memory Import` 并发：实现 `avm memory import --from <file> --dry-run`。
@@ -441,9 +442,10 @@ testdata/
 ## Round 2 任务队列
 
 ```text
-R2-P0 Lead prep (SERIAL)
+R2-P0 Lead prep (DONE)
   - 整理 cmd/avm 命令注册边界。
-  - 目标是让 Agent CLI 和 Memory Import 不需要同时改 root command 或同一个 registration 函数。
+  - cmd/avm/commands.go 负责注册，cmd/avm/memory.go 已预注册 memory import skeleton。
+  - Agent CLI 和 Memory Import 不需要同时改 root command 或同一个 registration 函数。
 
 R2-P1 Config Resolve Agent (PARALLEL)
   - internal/config/resolve*.go, merge*.go, tests
@@ -495,6 +497,8 @@ R2-P4 Lead integration (SERIAL)
 - testdata/config/resolve/**
 
 不要修改：
+- cmd/avm/root.go
+- cmd/avm/commands.go
 - cmd/**
 - internal/adapter/**
 - internal/memory/**
@@ -540,6 +544,8 @@ R2-P4 Lead integration (SERIAL)
 - testdata/cli/**
 
 不要修改：
+- cmd/avm/root.go
+- cmd/avm/commands.go
 - internal/adapter/**
 - internal/memory/**
 - internal/sync/**
@@ -589,6 +595,8 @@ R2-P4 Lead integration (SERIAL)
 - fixtures/phase1/** 中 memory import dry-run 相关文件
 
 不要修改：
+- cmd/avm/root.go
+- cmd/avm/commands.go
 - internal/config/models.go
 - internal/adapter/**
 - internal/sync/**
@@ -605,7 +613,7 @@ R2-P4 Lead integration (SERIAL)
 2. 实现 avm memory import --from <path> --dry-run。
 3. dry-run 可以打印 human-readable summary，也可以通过 flag 输出 JSON report；输出必须稳定。
 4. dry-run 不写 runtime 文件，也不写正式 ~/.avm/memory/**。
-5. 如果命令注册需要改共享 registration 文件，先停止并在最终说明里声明；不要自行跨 owner 修改。
+5. 使用已存在的 `memory` command skeleton；不要修改 `cmd/avm/commands.go`。
 
 验收：
 - go test ./... 通过

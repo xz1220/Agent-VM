@@ -26,7 +26,7 @@ func TestRegisteredCommandHelp(t *testing.T) {
 		{
 			name: "root",
 			args: []string{"--help"},
-			want: []string{"agent", "deactivate", "env", "init", "shell", "status", "use"},
+			want: []string{"agent", "deactivate", "env", "init", "memory", "shell", "status", "use"},
 		},
 		{
 			name: "agent",
@@ -42,6 +42,11 @@ func TestRegisteredCommandHelp(t *testing.T) {
 			name: "env create",
 			args: []string{"env", "create", "--help"},
 			want: []string{"create <name>", "--codex", "--claude-code", "--cline", "--cursor"},
+		},
+		{
+			name: "memory import",
+			args: []string{"memory", "import", "--help"},
+			want: []string{"import", "--from", "--dry-run", "--format"},
 		},
 		{
 			name: "use",
@@ -90,6 +95,7 @@ func TestSkeletonCommandsReturnNotImplemented(t *testing.T) {
 		{name: "agent list", args: []string{"agent", "list"}, want: "avm agent list: not implemented"},
 		{name: "agent show", args: []string{"agent", "show", "backend-coder"}, want: "avm agent show: not implemented"},
 		{name: "env create", args: []string{"env", "create", "backend-dev"}, want: "avm env create: not implemented"},
+		{name: "memory import", args: []string{"memory", "import"}, want: "avm memory import: not implemented"},
 		{name: "use", args: []string{"use", "backend-coder"}, want: "avm use: not implemented"},
 		{name: "status", args: []string{"status"}, want: "avm status: not implemented"},
 		{name: "shell init", args: []string{"shell", "init", "zsh"}, want: "avm shell init: not implemented"},
