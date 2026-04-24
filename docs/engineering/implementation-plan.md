@@ -42,8 +42,33 @@ Lead 验收结果：
 
 后续动作：
 
-- 可以启动 Round 1 的 4 个并发 Codex：Config、Adapter Contract、CLI Skeleton、Fixtures。
-- Round 1 Agent 不应修改 `go.mod`、`go.sum`、`cmd/avm/root.go`，除非在交付说明中声明并交给 Lead 合并。
+- Round 1 已合并到 `main`，见下方状态。
+
+### Round 1：Core Contract
+
+状态：`DONE`
+
+已合并分支：
+
+- `origin/feat/config`
+- `origin/feat/adapter-contract`
+- `origin/feat/cli-skeleton`
+- `origin/feat/fixtures`
+
+Lead 验收结果：
+
+- `go test ./...` 通过。
+- `go vet ./...` 通过。
+- `go run ./cmd/avm --help` 有稳定输出。
+- 关键子命令 `--help` 可运行：`init`、`agent`、`agent create/list/show`、`env create`、`use`、`status`、`shell init`、`deactivate`。
+- fixture JSON 可被 `jq empty` 解析。
+- fixture/testdata YAML 可被 YAML parser 解析。
+- fixture/testdata convention 未发现真实用户 runtime 路径。
+
+后续动作：
+
+- 可以启动 Round 2：Memory Agent、Agent CLI implementation、Config ResolveActivation。
+- 仍不要启动 Sync 或 concrete runtime adapters；它们等 first vertical slice 合并后再并发。
 
 ---
 
