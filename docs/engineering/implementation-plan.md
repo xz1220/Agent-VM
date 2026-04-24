@@ -8,7 +8,13 @@
 
 ## 总结
 
-可以进入 coding，但不能一上来全并发。初始仓库需要先由一个 Lead Agent 做最小 scaffold，锁定 module、目录、根命令、测试命令和公共 package 边界。scaffold 完成后，再按文件所有权拆成多个并发 lane。
+当前 `main` 已完成 Round 0/1：Go scaffold、config model、adapter contract、CLI skeleton 和 Phase 1 fixtures 都已合并。下一阶段进入 **Round 2 / First Vertical Slice**，目标是在不写任何 runtime 配置文件的前提下，打通：
+
+```text
+avm init
+  -> avm agent create/list/show
+  -> avm memory import --from <file> --dry-run
+```
 
 重要约束：**“推荐 Agent 分工”不是启动顺序**。启动顺序以 Stage/Round 为准；分工表只定义文件所有权和任务边界。任何公共接口、根命令、module 依赖、核心 struct 变更，都必须由对应 owner 串行落地后，其他 Agent 才能基于它继续。
 
@@ -30,45 +36,42 @@ PRD 已明确：Phase 1 不做 `sync --watch`，不做 `workspace_isolation` 主
 
 ## 当前执行状态
 
-### Round 0：Lead Scaffold
+### 已完成
 
-状态：`DONE`
+| Round | 状态 | 合并内容 | 验收 |
+|-------|------|----------|------|
+| Round 0 | `DONE` | Go module、Makefile、CI 占位、root command、version 包、公共 package 占位目录 | `go test ./...`、`go run ./cmd/avm --help` |
+| Round 1 | `DONE` | `origin/feat/config`、`origin/feat/adapter-contract`、`origin/feat/cli-skeleton`、`origin/feat/fixtures` | `go test ./...`、`go vet ./...`、关键 CLI help、fixture JSON/YAML 校验、路径扫描 |
 
-Lead 验收结果：
+Round 1 合并后的能力基线：
 
-- `go test ./...` 通过。
-- `go run ./cmd/avm --help` 有稳定输出。
-- Go module、Makefile、CI 占位、root command、version 包、公共 package 占位目录已存在。
+- Config 层已有 Phase 1 model、YAML read/write/list/validate、round-trip tests。
+- Adapter 层已有 contract、mapping status、fake adapter、render plan normalization。
+- CLI 层已有命令 skeleton，命令可稳定返回 `not implemented`。
+- Fixtures 已有 Phase 1 minimal layout。
 
-后续动作：
+### 下一阶段：Round 2 First Vertical Slice
 
-- Round 1 已合并到 `main`，见下方状态。
+状态：`READY`
 
-### Round 1：Core Contract
+Round 2 不启动 Sync Agent 或 runtime adapter agents。它只打通 AVM source-of-truth 内部路径和 read-only dry-run memory import。
 
-状态：`DONE`
+执行顺序：
 
-已合并分支：
+1. `R2-P0 Lead prep` 串行：整理 CLI 注册边界，避免 Memory Agent 和 Agent CLI 同时改 `cmd/avm/root.go` 或同一个 registration 函数。
+2. `R2-P1 Config Resolve` 并发：实现 `ResolveActivation`、project/global profile lookup、env runtime mapping。
+3. `R2-P2 Agent CLI` 并发：实现 `avm init`、`avm agent create/list/show`、基础 `avm env create`。
+4. `R2-P3 Memory Import` 并发：实现 `avm memory import --from <file> --dry-run`。
+5. `R2-P4 Lead integration` 串行：合并三个分支，在临时 HOME 下跑 e2e。
 
-- `origin/feat/config`
-- `origin/feat/adapter-contract`
-- `origin/feat/cli-skeleton`
-- `origin/feat/fixtures`
+Round 2 退出条件：
 
-Lead 验收结果：
-
-- `go test ./...` 通过。
-- `go vet ./...` 通过。
-- `go run ./cmd/avm --help` 有稳定输出。
-- 关键子命令 `--help` 可运行：`init`、`agent`、`agent create/list/show`、`env create`、`use`、`status`、`shell init`、`deactivate`。
-- fixture JSON 可被 `jq empty` 解析。
-- fixture/testdata YAML 可被 YAML parser 解析。
-- fixture/testdata convention 未发现真实用户 runtime 路径。
-
-后续动作：
-
-- 可以启动 Round 2：Memory Agent、Agent CLI implementation、Config ResolveActivation。
-- 仍不要启动 Sync 或 concrete runtime adapters；它们等 first vertical slice 合并后再并发。
+- `go test ./...` 和 `go vet ./...` 通过。
+- 临时 HOME 下 `avm init` 只写 `~/.avm/**`。
+- `avm agent create backend-coder --runtime codex` 创建 agent YAML。
+- `avm agent list/show` 输出稳定。
+- `avm memory import --from <file> --dry-run` 输出 `new | changed | conflict | skipped`，且不写 runtime 文件、不写正式 `~/.avm/memory/**`。
+- 仍不实现 `sync --watch`，不写 concrete runtime 配置。
 
 ---
 
@@ -76,21 +79,20 @@ Lead 验收结果：
 
 ### 启动规则
 
-1. Round 0 只能启动 1 个 Lead Agent，负责 repo scaffold 和公共骨架。
-2. Round 1 在 Round 0 合并后启动，建议并发 4 个 Codex：Config、Adapter Contract、CLI Skeleton、Fixtures。
-3. Round 2 在 Config + CLI Skeleton 可编译后启动，建议并发 2 个 Codex：Memory、Agent CLI。
-4. Round 3 在 Adapter contract 和 first vertical slice 稳定后启动，建议并发 Sync + runtime adapters。
-5. 每个 Codex 建议使用独立 `git worktree` 和独立 branch，不建议多个 Codex 直接在同一个 worktree 并发写。
+1. Round 0 和 Round 1 已完成，不再启动对应 Agent。
+2. Round 2 先由 Lead 做 `R2-P0` 串行准备，完成后再并发启动 Config Resolve、Agent CLI、Memory Import 三个 Codex。
+3. Round 2 的三个 Codex 必须从最新 `origin/main` 创建独立 worktree 和 branch。
+4. Round 3 只能在 Round 2 vertical slice 合并并通过 e2e 后启动。
+5. 每个 Codex 必须使用独立 `git worktree` 和独立 branch，不允许多个 Codex 直接在同一个 worktree 并发写。
 6. 任何 Agent 需要改 owner 之外的文件时，必须停止并在交付说明里声明，不要自行跨边界修改。
 
-推荐 worktree 形态：
+Round 2 推荐 worktree 形态：
 
 ```bash
-git worktree add ../agent-vm-scaffold -b feat/scaffold
-git worktree add ../agent-vm-config -b feat/config
-git worktree add ../agent-vm-adapter-contract -b feat/adapter-contract
-git worktree add ../agent-vm-cli -b feat/cli-skeleton
-git worktree add ../agent-vm-fixtures -b feat/fixtures
+git fetch origin main
+git worktree add ../agent-vm-config-resolve -b feat/config-resolve origin/main
+git worktree add ../agent-vm-agent-cli -b feat/agent-cli origin/main
+git worktree add ../agent-vm-memory-import -b feat/memory-import origin/main
 ```
 
 ### 必须串行
@@ -111,12 +113,14 @@ git worktree add ../agent-vm-fixtures -b feat/fixtures
 
 | 标记 | 任务 | 写入范围 | 依赖 |
 |------|------|----------|------|
-| `P1` | Config YAML 读写 + validation | `internal/config/**` | `S0` |
+| `P1` | Config YAML 读写 + validation | `internal/config/**` | `DONE` |
 | `P2` | Portable Memory import dry-run | `internal/memory/**`, `cmd/avm/memory*.go` | `S1`, `S3` |
-| `P3` | Adapter contract + fake adapter | `internal/adapter/**` | `S0` |
+| `P3` | Adapter contract + fake adapter | `internal/adapter/**` | `DONE` |
 | `P4` | Sync/state/backup | `internal/sync/**`, `internal/state/**` | `S1`, `S2` |
 | `P5` | CLI agent/env/status commands | `cmd/avm/**` | `S1`, `S3` |
-| `P6` | Runtime fixtures | `testdata/**`, `fixtures/**` | `S0` |
+| `P6` | Runtime fixtures | `testdata/**`, `fixtures/**` | `DONE` |
+| `P11` | Config ResolveActivation | `internal/config/resolve*.go`, `merge*.go`, tests | `S1` |
+| `P12` | Agent CLI implementation | `cmd/avm/init*.go`, `agent*.go`, `env*.go`, tests | `S1`, `S3` |
 | `P7` | Claude Code adapter | `internal/adapter/claude/**` | `S2` |
 | `P8` | Codex adapter | `internal/adapter/codex/**` | `S2` |
 | `P9` | Cline adapter | `internal/adapter/cline/**` | `S2` |
@@ -282,7 +286,7 @@ Owner:
 
 ### Stage 0：Scaffold 串行
 
-标记：`SERIAL`
+标记：`DONE`
 
 任务：
 
@@ -311,7 +315,7 @@ testdata/
 
 ### Stage 1：Core Contract 并发
 
-标记：`PARALLEL`
+标记：`DONE`
 
 可同时启动：
 
@@ -328,7 +332,7 @@ testdata/
 
 ### Stage 2：First Vertical Slice
 
-标记：`JOIN`
+标记：`NEXT`
 
 目标：先打通一个非 runtime 写入路径。
 
@@ -402,9 +406,11 @@ testdata/
 | 路径 | Owner | 备注 |
 |------|-------|------|
 | `go.mod`, `go.sum` | Lead Agent | 其他 Agent 需要依赖时先记录，合并时统一添加 |
-| `cmd/avm/root.go` | Lead Agent | 子命令文件可由 CLI/Memory Agent 写 |
-| `cmd/avm/memory*.go` | Memory Agent | 不和 CLI Agent 混改 |
-| `cmd/avm/agent*.go`, `env*.go`, `use*.go`, `status*.go` | CLI Agent | 只做命令编排 |
+| `cmd/avm/root.go` | Lead Agent | 不并发改 |
+| `cmd/avm/commands.go` | Lead Agent | Round 2 prep 可新增；用于集中注册，避免 Agent 冲突 |
+| `cmd/avm/memory*.go` | Memory Agent | 不和 Agent CLI 混改；registration 由 Lead 集成 |
+| `cmd/avm/init*.go`, `agent*.go`, `env*.go` | Agent CLI | Round 2 只实现 init/agent/env create |
+| `cmd/avm/use*.go`, `status*.go`, `shell*.go`, `deactivate*.go` | CLI Agent | Round 3 再实现 use/status/deactivate 行为 |
 | `internal/config/**` | Config Agent | 其他 Agent 不改 config struct |
 | `internal/adapter/adapter.go` | Adapter Contract Agent | concrete adapter 不改 interface |
 | `internal/adapter/<runtime>/**` | 对应 Runtime Agent | 每个 runtime 独立 |
@@ -422,6 +428,7 @@ testdata/
 - `go.mod`
 - `go.sum`
 - `cmd/avm/root.go`
+- `cmd/avm/commands.go`
 - `internal/config/models.go`
 - `internal/adapter/adapter.go`
 - `internal/config/resolve.go`
@@ -431,381 +438,182 @@ testdata/
 
 ---
 
-## 第一轮推荐任务队列
+## Round 2 任务队列
 
 ```text
-Round 0
-  Lead Agent:
-    S0 scaffold repo, go.mod, root command, go test ./...
+R2-P0 Lead prep (SERIAL)
+  - 整理 cmd/avm 命令注册边界。
+  - 目标是让 Agent CLI 和 Memory Import 不需要同时改 root command 或同一个 registration 函数。
 
-Round 1
-  Config Agent:
-    P1 internal/config models + read/write + validation
-  Adapter Contract Agent:
-    P3 internal/adapter interface + fake adapter
-  CLI Agent:
-    P5 cobra subcommand skeleton
-  Fixture Agent:
-    P6 testdata layout and fixture conventions
+R2-P1 Config Resolve Agent (PARALLEL)
+  - internal/config/resolve*.go, merge*.go, tests
+  - ResolveActivation(profile/env), project/global lookup, env runtime mapping
 
-Round 2
-  Memory Agent:
-    P2 memory import --dry-run from file
-  CLI Agent:
-    agent create/list/show
-  Config Agent:
-    ResolveActivation
+R2-P2 Agent CLI Agent (PARALLEL)
+  - cmd/avm/init*.go, agent*.go, env*.go, tests
+  - avm init, avm agent create/list/show, avm env create
 
-Round 3
-  Sync Agent:
-    active rebuild + state + backup + fake adapter render
-  Runtime Agents:
-    Claude / Codex / Cline / Cursor adapters in parallel
+R2-P3 Memory Import Agent (PARALLEL)
+  - internal/memory/**, cmd/avm/memory*.go, testdata/memory/**
+  - avm memory import --from <file> --dry-run
 
-Round 4
-  Lead Agent:
-    integration, acceptance, docs cleanup
+R2-P4 Lead integration (SERIAL)
+  - merge branches
+  - run temporary HOME e2e
+  - update this plan with Round 2 result
 ```
 
-## 手动 Codex 启动 Prompts
+## Round 2 Codex Prompts
 
-这些 prompt 用于人工启动多个 Codex。每个 Codex 从主仓库启动后，必须自己创建独立 worktree，进入 worktree 开发，验收通过后 push 到远程分支，然后停止。除非 prompt 明确允许，不要修改 owner 之外的文件。
+这些 prompt 用于人工启动 Round 2 的多个 Codex。每个 Codex 从主仓库启动后，必须自己创建独立 worktree，进入 worktree 开发，验收通过后 push 到远程分支，然后停止。
 
 通用规则：
 
-- 初始目录可以是主仓库 `/Users/danielxing/code/agent-vm`。
+- 启动前先 `git fetch origin main`，并基于最新 `origin/main` 创建分支。
 - 不要在主仓库 worktree 里改业务文件。
 - 如果目标 worktree 已存在，进入已有 worktree 继续；不要删除目录。
 - 如果远程不存在或 push 失败，保留本地 branch，并在最终说明中明确阻塞原因。
 - 开发完成后运行 `git status --short`，确认只包含本任务允许的文件。
 - push 命令使用 `git push -u origin <branch>`。
 
-### Prompt 0：Lead Scaffold（先单独跑）
+### Prompt 1：Config Resolve Agent
 
 ```text
-你是 Agent VM Phase 1 的 Lead Scaffold Agent。
-
-目标：
-- 完成 Round 0 / Stage 0 scaffold。
-- 当前仓库是空 Go 仓库或接近空仓库。
-
-写入范围：
-- go.mod, go.sum
-- cmd/avm/root.go
-- internal/version/**
-- Makefile 或 justfile
-- 必要的空 package 占位文件
-
-任务：
-1. 初始化 Go module。
-2. 建立目录：
-   - cmd/avm/
-   - internal/config/
-   - internal/adapter/
-   - internal/memory/
-   - internal/sync/
-   - internal/state/
-   - internal/backup/
-   - internal/runtime/
-   - testdata/
-3. 建最小 CLI root command，使 `go run ./cmd/avm --help` 有稳定输出。
-4. 建本地测试命令，使 `go test ./...` 可运行并通过。
-5. 不实现具体业务逻辑，不实现 runtime adapter，不把业务逻辑塞进 cmd/avm。
-
-验收：
-- `go test ./...` 通过。
-- `go run ./cmd/avm --help` 有输出。
-- 公共 package 有空实现或接口占位。
-- 最终说明列出修改文件、测试命令和结果。
-```
-
-### Prompt 1：Config Agent（Round 1）
-
-```text
-你是 Agent VM Phase 1 的 Config Agent。
-
-前置条件：
-- Lead Scaffold 已合并。
-- 你从主仓库启动，但必须先自己创建并进入独立 worktree。
+你是 Agent VM Phase 1 Round 2 的 Config Resolve Agent。
 
 启动步骤：
-1. 在当前目录运行：
-   - pwd
-   - git branch --show-current
-   - git remote -v
-   - git worktree list
-   - git status --short
-2. 创建或进入 worktree：
-   - 目标目录：../agent-vm-config
-   - 目标 branch：feat/config
-   - 如果 ../agent-vm-config 不存在且 feat/config branch 不存在，运行：git worktree add ../agent-vm-config -b feat/config
-   - 如果 ../agent-vm-config 不存在但 feat/config branch 已存在，运行：git worktree add ../agent-vm-config feat/config
-   - 如果目录已存在，进入该目录并确认 branch 是 feat/config。
-3. 进入 worktree 后再次运行：
-   - pwd
-   - git branch --show-current
-   - git status --short
-4. 只有当 pwd 位于 ../agent-vm-config 且 branch 是 feat/config 时，才允许修改文件。否则立即停止。
+1. 在主仓库运行：pwd、git branch --show-current、git fetch origin main、git worktree list、git status --short。
+2. 目标目录：../agent-vm-config-resolve；目标 branch：feat/config-resolve。
+3. 如果目录不存在且 branch 不存在：git worktree add ../agent-vm-config-resolve -b feat/config-resolve origin/main
+4. 如果目录不存在但 branch 已存在：git worktree add ../agent-vm-config-resolve feat/config-resolve
+5. cd ../agent-vm-config-resolve 后确认 pwd 和 branch。只有在 feat/config-resolve worktree 中才允许修改文件。
 
 写入范围：
-- internal/config/**
-- testdata/config/**
-
-允许修改：
-- go.mod/go.sum 仅当需要引入 YAML 依赖，例如 gopkg.in/yaml.v3。若修改，最终说明必须单独列出依赖变更，交给 Lead 合并。
+- internal/config/resolve*.go
+- internal/config/merge*.go
+- internal/config/*resolve*_test.go
+- testdata/config/resolve/**
 
 不要修改：
-- cmd/avm/**
+- cmd/**
 - internal/adapter/**
-- internal/sync/**
+- internal/memory/**
 - docs/engineering/implementation-plan.md
+- go.mod/go.sum，除非绝对必要；如必须修改，最终说明中声明
 
 任务：
-1. 实现 Phase 1 config data model：
-   - ActiveRef
-   - GlobalConfig
-   - AgentProfile
-   - Environment
-   - PortableMemory
-2. 使用 yaml.v3，不要自研 YAML parser/encoder。
-3. 实现 Read / Write / List / Validate。
-4. 添加 YAML round-trip 和 validation tests。
-5. 若 ResolveActivation 依赖其他未完成模块，可以预留清晰接口并说明。
-
-收尾步骤：
-1. 运行 `go test ./...`。
-2. 运行 `git status --short`，确认只包含允许文件。
-3. 提交本 branch。
-4. 运行 `git push -u origin feat/config`。
-5. push 完成后停止，不要继续做 Round 2。
+1. 实现 ResolvedActivation 和 ResolvedCapabilities 的最小 Phase 1 类型。
+2. 实现 ResolveActivation(ref ActiveRef, cwd string)：
+   - profile active：读取同名 Agent Profile。
+   - env active：读取 Environment，并按 runtime_agents.<runtime>.primary 展开 Agent Profile。
+   - profile lookup 优先 project .avm/agents，再读全局 ~/.avm/agents。
+   - targets 来自 env.targets、global defaults 或 profile runtime preferred。
+3. 实现必要的 MergeEnvironment / project override 占位或最小行为。
+4. 添加单测覆盖 profile active、env active、missing profile、project override 优先级。
 
 验收：
-- `go test ./...` 通过。
-- YAML round-trip 字段稳定。
-- `workspace_isolation` 不存在于 AgentProfile。
-- Environment 不接受 `capabilities` 或 `memory_layers`。
-- 最终说明列出修改文件、测试命令、结果、是否改了 go.mod/go.sum、远程 branch。
+- go test ./... 通过
+- go vet ./... 通过
+- 不改 AgentProfile 主模型中的 workspace_isolation
+- Environment 仍不接受 capabilities 或 memory_layers
+- 提交并 push：git push -u origin feat/config-resolve
+- 最终说明列出修改文件、测试结果、远程 branch、未实现的 Phase 2 行为
 ```
 
-### Prompt 2：Adapter Contract Agent（Round 1）
+### Prompt 2：Agent CLI Agent
 
 ```text
-你是 Agent VM Phase 1 的 Adapter Contract Agent。
-
-前置条件：
-- Lead Scaffold 已合并。
-- 你从主仓库启动，但必须先自己创建并进入独立 worktree。
+你是 Agent VM Phase 1 Round 2 的 Agent CLI Agent。
 
 启动步骤：
-1. 在当前目录运行：
-   - pwd
-   - git branch --show-current
-   - git remote -v
-   - git worktree list
-   - git status --short
-2. 创建或进入 worktree：
-   - 目标目录：../agent-vm-adapter-contract
-   - 目标 branch：feat/adapter-contract
-   - 如果 ../agent-vm-adapter-contract 不存在且 feat/adapter-contract branch 不存在，运行：git worktree add ../agent-vm-adapter-contract -b feat/adapter-contract
-   - 如果 ../agent-vm-adapter-contract 不存在但 feat/adapter-contract branch 已存在，运行：git worktree add ../agent-vm-adapter-contract feat/adapter-contract
-   - 如果目录已存在，进入该目录并确认 branch 是 feat/adapter-contract。
-3. 进入 worktree 后再次运行：
-   - pwd
-   - git branch --show-current
-   - git status --short
-4. 只有当 pwd 位于 ../agent-vm-adapter-contract 且 branch 是 feat/adapter-contract 时，才允许修改文件。否则立即停止。
+1. 在主仓库运行：pwd、git branch --show-current、git fetch origin main、git worktree list、git status --short。
+2. 目标目录：../agent-vm-agent-cli；目标 branch：feat/agent-cli。
+3. 如果目录不存在且 branch 不存在：git worktree add ../agent-vm-agent-cli -b feat/agent-cli origin/main
+4. 如果目录不存在但 branch 已存在：git worktree add ../agent-vm-agent-cli feat/agent-cli
+5. cd ../agent-vm-agent-cli 后确认 pwd 和 branch。只有在 feat/agent-cli worktree 中才允许修改文件。
 
 写入范围：
-- internal/adapter/adapter.go
-- internal/adapter/fake/**
-- internal/adapter/renderplan/**
-
-不要修改：
-- concrete runtime adapter 目录，例如 internal/adapter/codex/**
-- internal/config/**
-- cmd/avm/**
-- internal/sync/**
-- docs/engineering/implementation-plan.md
-- go.mod/go.sum，除非绝对必要；如必须修改，最终说明中声明。
-
-任务：
-1. 定义 Adapter interface。
-2. 定义 RenderInput、RenderPlan、RenderOperation、FieldMapping、ManagedPath。
-3. 定义 MappingStatus，合法值只能是：
-   - native
-   - rendered_as_instructions
-   - ignored
-   - unsupported
-4. 定义 optional MemoryImportCapable。
-5. 实现 fake adapter，供后续 sync tests 使用。
-6. 添加 deterministic render plan tests。
-
-约束：
-- 当前 config types 可能还没合并，可以先让 adapter contract 自己可编译。
-- 不要复制或重建完整 config.AgentProfile schema。
-- 不要用泛滥的 map[string]any 代替核心合同。
-- 等 Config Agent 合并后，Lead 会负责把 RenderInput 与 config.ResolvedActivation / config.AgentProfile 对齐。
-
-收尾步骤：
-1. 运行 `go test ./...`。
-2. 运行 `git status --short`，确认只包含允许文件。
-3. 提交本 branch。
-4. 运行 `git push -u origin feat/adapter-contract`。
-5. push 完成后停止，不要继续做 runtime adapter。
-
-验收：
-- `go test ./...` 通过。
-- mapping status 只允许：
-  - native
-  - rendered_as_instructions
-  - ignored
-  - unsupported
-- fake adapter 能生成 deterministic render plan。
-- 最终说明列出修改文件、测试命令、结果、哪些点等待 config types 接入、远程 branch。
-```
-
-### Prompt 3：CLI Skeleton Agent（Round 1）
-
-```text
-你是 Agent VM Phase 1 的 CLI Skeleton Agent。
-
-前置条件：
-- Lead Scaffold 已合并。
-- 你从主仓库启动，但必须先自己创建并进入独立 worktree。
-
-启动步骤：
-1. 在当前目录运行：
-   - pwd
-   - git branch --show-current
-   - git remote -v
-   - git worktree list
-   - git status --short
-2. 创建或进入 worktree：
-   - 目标目录：../agent-vm-cli
-   - 目标 branch：feat/cli-skeleton
-   - 如果 ../agent-vm-cli 不存在且 feat/cli-skeleton branch 不存在，运行：git worktree add ../agent-vm-cli -b feat/cli-skeleton
-   - 如果 ../agent-vm-cli 不存在但 feat/cli-skeleton branch 已存在，运行：git worktree add ../agent-vm-cli feat/cli-skeleton
-   - 如果目录已存在，进入该目录并确认 branch 是 feat/cli-skeleton。
-3. 进入 worktree 后再次运行：
-   - pwd
-   - git branch --show-current
-   - git status --short
-4. 只有当 pwd 位于 ../agent-vm-cli 且 branch 是 feat/cli-skeleton 时，才允许修改文件。否则立即停止。
-
-写入范围：
+- cmd/avm/init*.go
 - cmd/avm/agent*.go
 - cmd/avm/env*.go
-- cmd/avm/use*.go
-- cmd/avm/status*.go
-- cmd/avm/shell*.go
-- cmd/avm/deactivate*.go
-- cmd/avm/*_test.go only for CLI skeleton tests
+- cmd/avm/*_test.go
+- testdata/cli/**
 
 不要修改：
-- internal/config/**
 - internal/adapter/**
+- internal/memory/**
 - internal/sync/**
-- go.mod/go.sum，除非绝对必要；如必须修改，最终说明中声明。
 - docs/engineering/implementation-plan.md
-
-关于 cmd/avm/root.go：
-- 默认不要改。
-- 如果现有 root command 没有子命令注册扩展点，允许做最小修改，例如增加 addCommands(root) hook。
-- 如果改了 root.go，最终说明必须明确写出原因和改动范围。
+- go.mod/go.sum，除非绝对必要；如必须修改，最终说明中声明
 
 任务：
-1. 注册以下命令 skeleton：
-   - avm init
-   - avm agent create/list/show
-   - avm env create
-   - avm use
-   - avm status
-   - avm shell init
-   - avm deactivate
-2. 命令可以返回稳定的 `not implemented`。
-3. 命令输出要稳定，便于 golden tests。
-4. 命令层只做编排，不直接写 runtime config。
-
-收尾步骤：
-1. 运行 `go test ./...`。
-2. 运行 `go run ./cmd/avm --help`。
-3. 运行关键子命令 `--help`。
-4. 运行 `git status --short`，确认只包含允许文件。
-5. 提交本 branch。
-6. 运行 `git push -u origin feat/cli-skeleton`。
-7. push 完成后停止，不要实现业务逻辑。
+1. 实现 avm init：
+   - 只写 HOME 下的 ~/.avm/**
+   - 创建 config.yaml、agents/default.yaml、envs/default.yaml 和必要目录
+   - 支持临时 HOME 单测
+2. 实现 avm agent create/list/show：
+   - create 写 AgentProfile YAML
+   - list/show 输出稳定，适合 tests
+   - 支持 --runtime、--scope、--model、--reasoning、--skills、--mcps、--memory
+3. 实现 avm env create 的最小版本：
+   - 写 Environment YAML
+   - Environment 不声明 capabilities 或 memory_layers
+4. 命令层只调用 config 包，不写 runtime 配置。
 
 验收：
-- `go test ./...` 通过。
-- `go run ./cmd/avm --help` 能看到命令。
-- 关键子命令 help 可运行。
-- 最终说明列出修改文件、测试命令、结果、是否改了 root.go、远程 branch。
+- go test ./... 通过
+- go vet ./... 通过
+- 临时 HOME 下 avm init 只写 ~/.avm/**
+- avm agent create/list/show 可用
+- avm env create 可用
+- 提交并 push：git push -u origin feat/agent-cli
+- 最终说明列出修改文件、测试结果、远程 branch
 ```
 
-### Prompt 4：Fixture Agent（Round 1）
+### Prompt 3：Memory Import Agent
 
 ```text
-你是 Agent VM Phase 1 的 Runtime Fixture Agent。
-
-前置条件：
-- Lead Scaffold 已合并。
-- 你从主仓库启动，但必须先自己创建并进入独立 worktree。
+你是 Agent VM Phase 1 Round 2 的 Memory Import Agent。
 
 启动步骤：
-1. 在当前目录运行：
-   - pwd
-   - git branch --show-current
-   - git remote -v
-   - git worktree list
-   - git status --short
-2. 创建或进入 worktree：
-   - 目标目录：../agent-vm-fixtures
-   - 目标 branch：feat/fixtures
-   - 如果 ../agent-vm-fixtures 不存在且 feat/fixtures branch 不存在，运行：git worktree add ../agent-vm-fixtures -b feat/fixtures
-   - 如果 ../agent-vm-fixtures 不存在但 feat/fixtures branch 已存在，运行：git worktree add ../agent-vm-fixtures feat/fixtures
-   - 如果目录已存在，进入该目录并确认 branch 是 feat/fixtures。
-3. 进入 worktree 后再次运行：
-   - pwd
-   - git branch --show-current
-   - git status --short
-4. 只有当 pwd 位于 ../agent-vm-fixtures 且 branch 是 feat/fixtures 时，才允许修改文件。否则立即停止。
+1. 在主仓库运行：pwd、git branch --show-current、git fetch origin main、git worktree list、git status --short。
+2. 目标目录：../agent-vm-memory-import；目标 branch：feat/memory-import。
+3. 如果目录不存在且 branch 不存在：git worktree add ../agent-vm-memory-import -b feat/memory-import origin/main
+4. 如果目录不存在但 branch 已存在：git worktree add ../agent-vm-memory-import feat/memory-import
+5. cd ../agent-vm-memory-import 后确认 pwd 和 branch。只有在 feat/memory-import worktree 中才允许修改文件。
 
 写入范围：
-- testdata/**
-- fixtures/**
-- docs 中与 fixture convention 直接相关的小段说明
+- internal/memory/**
+- cmd/avm/memory*.go
+- testdata/memory/**
+- fixtures/phase1/** 中 memory import dry-run 相关文件
 
 不要修改：
-- internal/**
-- cmd/**
-- go.mod/go.sum
+- internal/config/models.go
+- internal/adapter/**
+- internal/sync/**
+- cmd/avm/agent*.go
+- cmd/avm/env*.go
 - docs/engineering/implementation-plan.md
+- go.mod/go.sum，除非绝对必要；如必须修改，最终说明中声明
 
 任务：
-1. 建立 Phase 1 fixture layout。
-2. 为以下场景预留 fixture convention：
-   - config
-   - memory import dry-run
-   - adapter render plan
-   - Codex adapter output
-   - Claude Code adapter output
-   - Cline adapter output
-   - Cursor PoC output
-3. 添加最小示例 fixture，覆盖 Codex、Claude Code、Cline、Cursor PoC 的目录形态。
-4. 避免写入真实用户 runtime 配置路径。
-
-收尾步骤：
-1. 运行 `go test ./...`。
-2. 运行 `git status --short`，确认只包含允许文件。
-3. 提交本 branch。
-4. 运行 `git push -u origin feat/fixtures`。
-5. push 完成后停止，不要实现业务代码。
+1. 实现 memory import from file 的 dry-run：
+   - 支持 markdown/yaml 输入
+   - 生成 MemoryImportPlan、MemoryDiff
+   - diff status 只能是 new、changed、conflict、skipped
+2. 实现 avm memory import --from <path> --dry-run。
+3. dry-run 可以打印 human-readable summary，也可以通过 flag 输出 JSON report；输出必须稳定。
+4. dry-run 不写 runtime 文件，也不写正式 ~/.avm/memory/**。
+5. 如果命令注册需要改共享 registration 文件，先停止并在最终说明里声明；不要自行跨 owner 修改。
 
 验收：
-- fixture 路径命名稳定。
-- README 或 docs 说明如何引用 fixture。
-- 不需要业务代码也不能破坏 `go test ./...`。
-- 最终说明列出修改文件、验证方式、远程 branch。
+- go test ./... 通过
+- go vet ./... 通过
+- 临时 HOME 下 dry-run 不写 runtime 文件、不写正式 ~/.avm/memory/**
+- 输出包含 new | changed | conflict | skipped
+- 提交并 push：git push -u origin feat/memory-import
+- 最终说明列出修改文件、测试结果、远程 branch、是否需要 Lead wiring
 ```
 
 ---
