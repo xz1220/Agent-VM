@@ -2,6 +2,8 @@ package fake_test
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -97,16 +99,19 @@ func TestPlanUsesOnlyAllowedMappingStatuses(t *testing.T) {
 func TestRenderCapturesNormalizedPlan(t *testing.T) {
 	ctx := context.Background()
 	fakeAdapter := fake.New()
+	dir := t.TempDir()
+	zPath := filepath.Join(dir, "z")
+	aPath := filepath.Join(dir, "a")
 	plan := &adapter.RenderPlan{
 		Runtime:   "fake",
 		AgentName: "backend",
 		ManagedPaths: []adapter.ManagedPath{
-			{Path: "/z", Owner: "avm", MergeMode: adapter.MergeModeWholeFile},
-			{Path: "/a", Owner: "avm", MergeMode: adapter.MergeModeWholeFile},
+			{Path: zPath, Owner: "avm", MergeMode: adapter.MergeModeWholeFile},
+			{Path: aPath, Owner: "avm", MergeMode: adapter.MergeModeWholeFile},
 		},
 		Operations: []adapter.RenderOperation{
-			{ID: "z", Action: adapter.OperationWriteFile, Path: "/z"},
-			{ID: "a", Action: adapter.OperationWriteFile, Path: "/a"},
+			{ID: "z", Action: adapter.OperationWriteFile, Path: zPath, Content: []byte("z")},
+			{ID: "a", Action: adapter.OperationWriteFile, Path: aPath, Content: []byte("a")},
 		},
 	}
 
@@ -122,8 +127,79 @@ func TestRenderCapturesNormalizedPlan(t *testing.T) {
 	if len(rendered) != 1 {
 		t.Fatalf("expected one rendered plan, got %d", len(rendered))
 	}
-	if got := rendered[0].ManagedPaths[0].Path; got != "/a" {
+	if got := rendered[0].ManagedPaths[0].Path; got != aPath {
 		t.Fatalf("stored rendered plan was not normalized: first path %q", got)
+	}
+}
+
+func TestRenderAppliesManagedPathOperations(t *testing.T) {
+	ctx := context.Background()
+	fakeAdapter := fake.New()
+	dir := t.TempDir()
+	nestedDir := filepath.Join(dir, "nested")
+	targetPath := filepath.Join(nestedDir, "profile.txt")
+	removePath := filepath.Join(dir, "stale.txt")
+	if err := os.WriteFile(removePath, []byte("stale"), 0o600); err != nil {
+		t.Fatalf("write stale file: %v", err)
+	}
+
+	plan := &adapter.RenderPlan{
+		Runtime:   "fake",
+		AgentName: "backend",
+		Operations: []adapter.RenderOperation{
+			{ID: "ensure-dir", Action: adapter.OperationEnsureDir, Path: nestedDir},
+			{ID: "write", Action: adapter.OperationWriteFile, Path: targetPath, Content: []byte("hello")},
+			{ID: "remove", Action: adapter.OperationRemoveFile, Path: removePath},
+		},
+	}
+
+	first, err := fakeAdapter.Render(ctx, plan)
+	if err != nil {
+		t.Fatalf("first render failed: %v", err)
+	}
+	if got := operationChanged(first, "ensure-dir"); !got {
+		t.Fatalf("ensure-dir should report changed on first render")
+	}
+	if got := operationChanged(first, "write"); !got {
+		t.Fatalf("write should report changed on first render")
+	}
+	if got := operationChanged(first, "remove"); !got {
+		t.Fatalf("remove should report changed on first render")
+	}
+	assertFileContent(t, targetPath, "hello")
+	if _, err := os.Stat(removePath); !os.IsNotExist(err) {
+		t.Fatalf("expected stale file to be removed, stat err: %v", err)
+	}
+
+	second, err := fakeAdapter.Render(ctx, plan)
+	if err != nil {
+		t.Fatalf("second render failed: %v", err)
+	}
+	for _, id := range []string{"ensure-dir", "write", "remove"} {
+		if got := operationChanged(second, id); got {
+			t.Fatalf("%s should not report changed on second render", id)
+		}
+	}
+}
+
+func operationChanged(result *adapter.RenderResult, operationID string) bool {
+	for _, operation := range result.Operations {
+		if operation.OperationID == operationID {
+			return operation.Changed
+		}
+	}
+	return false
+}
+
+func assertFileContent(t *testing.T, path, expected string) {
+	t.Helper()
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read rendered file: %v", err)
+	}
+	if string(content) != expected {
+		t.Fatalf("unexpected file content %q, want %q", content, expected)
 	}
 }
 

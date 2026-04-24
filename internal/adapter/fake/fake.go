@@ -2,7 +2,9 @@
 package fake
 
 import (
+	"bytes"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -193,19 +195,23 @@ func (a *Adapter) Render(ctx adapter.Context, plan *adapter.RenderPlan) (*adapte
 		return nil, fmt.Errorf("fake adapter render plan is nil")
 	}
 
-	a.mu.Lock()
-	a.rendered = append(a.rendered, normalized)
-	a.mu.Unlock()
-
 	results := make([]adapter.RenderOperationResult, 0, len(normalized.Operations))
 	for _, operation := range normalized.Operations {
+		changed, err := applyRenderOperation(operation)
+		if err != nil {
+			return nil, err
+		}
 		results = append(results, adapter.RenderOperationResult{
 			OperationID: operation.ID,
 			Action:      operation.Action,
 			Path:        operation.Path,
-			Changed:     true,
+			Changed:     changed,
 		})
 	}
+
+	a.mu.Lock()
+	a.rendered = append(a.rendered, normalized)
+	a.mu.Unlock()
 
 	return &adapter.RenderResult{
 		Runtime:      normalized.Runtime,
@@ -214,6 +220,73 @@ func (a *Adapter) Render(ctx adapter.Context, plan *adapter.RenderPlan) (*adapte
 		Mappings:     append([]adapter.FieldMapping(nil), normalized.Mappings...),
 		Warnings:     append([]string(nil), normalized.Warnings...),
 	}, nil
+}
+
+func applyRenderOperation(operation adapter.RenderOperation) (bool, error) {
+	if operation.Path == "" {
+		return false, fmt.Errorf("fake adapter render operation %q has empty path", operation.ID)
+	}
+
+	switch operation.Action {
+	case adapter.OperationEnsureDir:
+		return ensureDir(operation.Path)
+	case adapter.OperationWriteFile:
+		return writeFile(operation.Path, operation.Content)
+	case adapter.OperationRemoveFile:
+		return removeFile(operation.Path)
+	case adapter.OperationMergeSection, adapter.OperationStructuredSet:
+		return false, fmt.Errorf("fake adapter cannot apply %s operation %q at %s", operation.Action, operation.ID, operation.Path)
+	default:
+		return false, fmt.Errorf("fake adapter render operation %q has unsupported action %q", operation.ID, operation.Action)
+	}
+}
+
+func ensureDir(path string) (bool, error) {
+	info, err := os.Stat(path)
+	if err == nil {
+		if !info.IsDir() {
+			return false, fmt.Errorf("cannot ensure directory %s: path exists and is not a directory", path)
+		}
+		return false, nil
+	}
+	if !os.IsNotExist(err) {
+		return false, err
+	}
+	if err := os.MkdirAll(path, 0o700); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func writeFile(path string, content []byte) (bool, error) {
+	existing, err := os.ReadFile(path)
+	if err == nil && bytes.Equal(existing, content) {
+		return false, nil
+	}
+	if err != nil && !os.IsNotExist(err) {
+		return false, err
+	}
+
+	parent := filepath.Dir(path)
+	if parent != "." && parent != "" {
+		if err := os.MkdirAll(parent, 0o700); err != nil {
+			return false, err
+		}
+	}
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func removeFile(path string) (bool, error) {
+	if err := os.Remove(path); err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
 }
 
 func (a *Adapter) ManagedPaths(ctx adapter.Context, plan *adapter.RenderPlan) []adapter.ManagedPath {

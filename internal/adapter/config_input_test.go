@@ -1,0 +1,107 @@
+package adapter
+
+import (
+	"reflect"
+	"testing"
+
+	"github.com/xz1220/agent-vm/internal/config"
+)
+
+func TestRenderInputFromResolved(t *testing.T) {
+	temperature := 0.2
+	resolved := &config.ResolvedActivation{
+		Active: config.ActiveRef{Kind: config.ActiveKindProfile, Name: "backend"},
+		RuntimeAgents: map[string]config.AgentProfile{
+			"codex": {
+				Name:        "backend",
+				Description: "Backend agent",
+				SourceScope: "global",
+				Instructions: config.Instructions{
+					System:     "system",
+					Developer:  "developer",
+					References: []string{"ref"},
+				},
+				ModelRun: config.ModelRun{
+					Model:           "gpt-5.4",
+					ReasoningEffort: "high",
+					Verbosity:       "normal",
+					Temperature:     &temperature,
+				},
+				Permissions: config.Permissions{
+					Approval:              "on-request",
+					Sandbox:               "workspace-write",
+					Allow:                 []string{"Read"},
+					Deny:                  []string{"Bash(rm *)"},
+					AdditionalDirectories: []string{"../shared"},
+				},
+				MemoryRefs: []config.MemoryRef{
+					{ID: "standards", Scope: "project", Path: "/memory/standards.md", Mode: "read"},
+				},
+			},
+		},
+		Capabilities: map[string]config.ResolvedCapabilities{
+			"codex": {
+				Skills:   []string{"test"},
+				MCPs:     []string{"github"},
+				Commands: []string{"fmt"},
+				Hooks:    []string{"pre"},
+				Toolsets: map[string]string{"shell": "limited"},
+			},
+		},
+		Memory: map[string][]config.PortableMemory{
+			"codex": {
+				{ID: "standards", Scope: "project", Path: "/memory/standards.md", Mode: "read"},
+			},
+		},
+	}
+
+	input, err := RenderInputFromResolved(resolved, "codex", RenderInputOptions{ProjectRoot: "/repo", ActiveDir: "/active"})
+	if err != nil {
+		t.Fatalf("RenderInputFromResolved returned error: %v", err)
+	}
+
+	if input.Active.Name != "backend" || input.Runtime != "codex" || input.ProjectRoot != "/repo" || input.ActiveDir != "/active" {
+		t.Fatalf("unexpected input identity: %#v", input)
+	}
+	if input.Agent.Name != "backend" || input.Agent.Instructions.Developer != "developer" {
+		t.Fatalf("agent projection not populated: %#v", input.Agent)
+	}
+	if input.Agent.Model.Temperature == nil || *input.Agent.Model.Temperature != temperature {
+		t.Fatalf("model projection not populated: %#v", input.Agent.Model)
+	}
+	if got := input.Capabilities.MCPServers[0].Name; got != "github" {
+		t.Fatalf("mcp projection not populated: %q", got)
+	}
+	if got := input.Capabilities.Toolsets[0]; got != (Toolset{Name: "shell", Mode: "limited"}) {
+		t.Fatalf("toolset projection not populated: %#v", got)
+	}
+	if got := input.Memory[0].ID; got != "standards" {
+		t.Fatalf("memory projection not populated: %#v", input.Memory)
+	}
+}
+
+func TestRenderInputsFromResolvedOrdersTargetsAndSkipsMissingAgents(t *testing.T) {
+	resolved := &config.ResolvedActivation{
+		Active:  config.ActiveRef{Kind: config.ActiveKindEnv, Name: "backend-dev"},
+		Targets: []string{"claude-code", "cursor", "codex"},
+		RuntimeAgents: map[string]config.AgentProfile{
+			"codex":       {Name: "coder"},
+			"claude-code": {Name: "reviewer"},
+			"cline":       {Name: "assistant"},
+		},
+	}
+
+	inputs, err := RenderInputsFromResolved(resolved, RenderInputOptions{})
+	if err != nil {
+		t.Fatalf("RenderInputsFromResolved returned error: %v", err)
+	}
+
+	var runtimes []string
+	for _, input := range inputs {
+		runtimes = append(runtimes, input.Runtime)
+	}
+	want := []string{"claude-code", "codex", "cline"}
+	if !reflect.DeepEqual(runtimes, want) {
+		t.Fatalf("unexpected runtime order: got %v want %v", runtimes, want)
+	}
+}
