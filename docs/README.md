@@ -18,6 +18,7 @@ docs/
 │   ├── fixture-conventions.md
 │   ├── workflows.md
 │   ├── acceptance.md
+│   ├── stage5-acceptance-gap-report.md
 │   ├── implementation-plan.md
 │   └── modules/
 │       ├── adapter.md
@@ -35,5 +36,6 @@ docs/
 2. [design/tech-design.md](./design/tech-design.md) — 技术设计总入口。
 3. [engineering/implementation-plan.md](./engineering/implementation-plan.md) — coding 路径、并发 lane 和文件所有权。
 4. [engineering/acceptance.md](./engineering/acceptance.md) — Phase 1 验收标准。
-5. [research/runtime-mapping.md](./research/runtime-mapping.md) — runtime 配置映射调研。
-6. [engineering/fixture-conventions.md](./engineering/fixture-conventions.md) — fixture layout、路径占位符和 runtime convention。
+5. [engineering/stage5-acceptance-gap-report.md](./engineering/stage5-acceptance-gap-report.md) — Stage 5 当前可执行验收结果和缺口清单。
+6. [research/runtime-mapping.md](./research/runtime-mapping.md) — runtime 配置映射调研。
+7. [engineering/fixture-conventions.md](./engineering/fixture-conventions.md) — fixture layout、路径占位符和 runtime convention。
