@@ -263,6 +263,7 @@ See [ROADMAP.md](ROADMAP.md).
 
 ## Project Docs
 
+- [Design system](DESIGN.md)
 - [Product requirements](docs/product/prd.md)
 - [Technical design](docs/design/tech-design.md)
 - [Architecture](docs/engineering/architecture.md)

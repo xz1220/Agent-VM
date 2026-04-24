@@ -251,6 +251,7 @@ AVM 默认采取保守策略：
 
 ## 项目文档
 
+- [设计系统](DESIGN.md)
 - [产品需求文档](docs/product/prd.md)
 - [技术设计](docs/design/tech-design.md)
 - [架构](docs/engineering/architecture.md)

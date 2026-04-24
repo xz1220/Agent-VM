@@ -49,6 +49,7 @@ Do not present AVM as installable until these work end to end:
 
 Current repo assets:
 
+- `DESIGN.md` — AVM visual source of truth, inspired by Cursor-like developer tooling.
 - `assets/avm-hero.svg` — README hero and social-preview source.
 - `assets/avm-before-after.svg` — README problem/solution visual.
 
