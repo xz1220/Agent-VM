@@ -46,6 +46,11 @@ Do not present AVM as installable until these work end to end:
 
 ## Demo Assets
 
+Current repo assets:
+
+- `assets/avm-hero.svg` — README hero and social-preview source.
+- `assets/avm-before-after.svg` — README problem/solution visual.
+
 Create a short terminal recording that shows:
 
 1. `avm init`
