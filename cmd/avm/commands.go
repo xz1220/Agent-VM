@@ -16,6 +16,7 @@ func addCommands(root *cobra.Command) {
 		newStatusCommand(),
 		newShellCommand(),
 		newDeactivateCommand(),
+		newSyncCommand(),
 	)
 }
 

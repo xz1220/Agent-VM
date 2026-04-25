@@ -1,6 +1,10 @@
 package main
 
-import "github.com/spf13/cobra"
+import (
+	"fmt"
+
+	"github.com/spf13/cobra"
+)
 
 func newShellCommand() *cobra.Command {
 	cmd := &cobra.Command{
@@ -20,6 +24,125 @@ func newShellInitCommand() *cobra.Command {
 		Short:     "Print AVM shell integration",
 		Args:      cobra.ExactArgs(1),
 		ValidArgs: []string{"bash", "zsh", "fish"},
-		RunE:      notImplemented,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			snippet, err := shellInitSnippet(args[0])
+			if err != nil {
+				return err
+			}
+			fmt.Fprint(cmd.OutOrStdout(), snippet)
+			return nil
+		},
 	}
 }
+
+func shellInitSnippet(shell string) (string, error) {
+	switch shell {
+	case "bash":
+		return bashShellInitSnippet, nil
+	case "zsh":
+		return zshShellInitSnippet, nil
+	case "fish":
+		return fishShellInitSnippet, nil
+	default:
+		return "", fmt.Errorf("unsupported shell %q", shell)
+	}
+}
+
+const bashShellInitSnippet = `# avm shell integration
+__avm_current_active() {
+  local state_dir="${AVM_STATE_DIR:-$HOME/.avm/state}"
+  local state_file="$state_dir/current-active"
+  local active name
+  [ -r "$state_file" ] || return 0
+  IFS= read -r active < "$state_file" || return 0
+  case "$active" in
+    profile:[A-Za-z0-9_.-]*|env:[A-Za-z0-9_.-]*) name="${active#*:}" ;;
+    *) return 0 ;;
+  esac
+  case "$name" in
+    ""|*[!A-Za-z0-9_.-]*) return 0 ;;
+  esac
+  printf '(avm:%s) ' "$name"
+}
+
+if [ -z "${__AVM_ORIGINAL_PS1+x}" ]; then
+  __AVM_ORIGINAL_PS1="${PS1-}"
+fi
+
+__avm_prompt_command() {
+  local avm_active
+  avm_active="$(__avm_current_active)"
+  PS1="${avm_active}${__AVM_ORIGINAL_PS1}"
+}
+
+case ";${PROMPT_COMMAND:-};" in
+  *";__avm_prompt_command;"*) ;;
+  *) PROMPT_COMMAND="__avm_prompt_command${PROMPT_COMMAND:+;$PROMPT_COMMAND}" ;;
+esac
+`
+
+const zshShellInitSnippet = `# avm shell integration
+__avm_current_active() {
+  local state_dir="${AVM_STATE_DIR:-$HOME/.avm/state}"
+  local state_file="$state_dir/current-active"
+  local active name
+  [ -r "$state_file" ] || return 0
+  IFS= read -r active < "$state_file" || return 0
+  case "$active" in
+    profile:[A-Za-z0-9_.-]*|env:[A-Za-z0-9_.-]*) name="${active#*:}" ;;
+    *) return 0 ;;
+  esac
+  case "$name" in
+    ""|*[!A-Za-z0-9_.-]*) return 0 ;;
+  esac
+  printf '(avm:%s) ' "$name"
+}
+
+if [ -z "${__AVM_ORIGINAL_PROMPT+x}" ]; then
+  __AVM_ORIGINAL_PROMPT="${PROMPT-}"
+fi
+
+__avm_precmd() {
+  local avm_active
+  avm_active="$(__avm_current_active)"
+  PROMPT="${avm_active}${__AVM_ORIGINAL_PROMPT}"
+}
+
+autoload -Uz add-zsh-hook
+add-zsh-hook -d precmd __avm_precmd 2>/dev/null || true
+add-zsh-hook precmd __avm_precmd
+`
+
+const fishShellInitSnippet = `# avm shell integration
+function __avm_current_active
+    set -l state_dir "$HOME/.avm/state"
+    if set -q AVM_STATE_DIR
+        set state_dir "$AVM_STATE_DIR"
+    end
+    set -l state_file "$state_dir/current-active"
+    test -r "$state_file"; or return 0
+    read -l active < "$state_file"; or return 0
+    switch "$active"
+        case 'profile:*' 'env:*'
+            set -l name (string replace -r '^[^:]*:' '' -- "$active")
+            if string match -qr '^[A-Za-z0-9_.-]+$' -- "$name"
+                printf '(avm:%s) ' "$name"
+            end
+    end
+end
+
+if functions -q fish_prompt; and not functions -q __avm_original_fish_prompt
+    functions -c fish_prompt __avm_original_fish_prompt
+end
+
+if not functions -q __avm_original_fish_prompt
+    function __avm_original_fish_prompt
+        printf '> '
+    end
+end
+
+function fish_prompt
+    __avm_current_active
+    __avm_original_fish_prompt
+end
+`
