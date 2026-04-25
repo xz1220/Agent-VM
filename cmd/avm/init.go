@@ -3,28 +3,40 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/spf13/cobra"
 	"github.com/xz1220/agent-vm/internal/config"
+	"github.com/xz1220/agent-vm/internal/state"
 )
 
 func newInitCommand() *cobra.Command {
+	var force bool
 	cmd := &cobra.Command{
 		Use:   "init",
 		Short: "Initialize an AVM home directory",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := initAVMHome(); err != nil {
+			if err := initAVMHome(force); err != nil {
 				return err
 			}
 			fmt.Fprintln(cmd.OutOrStdout(), "initialized avm home")
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&force, "force", false, "rebuild default AVM config, agent, and env")
 	return cmd
 }
 
-func initAVMHome() error {
+func initAVMHome(force bool) error {
+	if !force {
+		if _, err := os.Stat(config.GlobalConfigPath()); err == nil {
+			return fmt.Errorf("avm home already initialized; use --force to rebuild defaults")
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+	}
+
 	dirs := []string{
 		config.AvmDir(),
 		config.AgentsDir(),
@@ -40,6 +52,7 @@ func initAVMHome() error {
 		config.ActiveDir(),
 		config.StateDir(),
 		config.BackupDir(),
+		cacheDir(),
 	}
 	for _, dir := range dirs {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -53,7 +66,14 @@ func initAVMHome() error {
 	if err := config.WriteAgent(defaultAgentProfile(), config.ScopeGlobal, ""); err != nil {
 		return err
 	}
-	return config.WriteEnvironment(defaultEnvironment())
+	if err := config.WriteEnvironment(defaultEnvironment()); err != nil {
+		return err
+	}
+	return state.SaveSyncState(syncStatePath(), state.NewSyncState(defaultGlobalConfig().Active))
+}
+
+func cacheDir() string {
+	return filepath.Join(config.AvmDir(), "cache")
 }
 
 func defaultGlobalConfig() *config.GlobalConfig {

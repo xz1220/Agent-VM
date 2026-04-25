@@ -26,7 +26,7 @@ func TestRegisteredCommandHelp(t *testing.T) {
 		{
 			name: "root",
 			args: []string{"--help"},
-			want: []string{"agent", "deactivate", "env", "init", "memory", "shell", "status", "use"},
+			want: []string{"agent", "deactivate", "env", "init", "memory", "shell", "status", "sync", "use"},
 		},
 		{
 			name: "agent",
@@ -68,6 +68,11 @@ func TestRegisteredCommandHelp(t *testing.T) {
 			args: []string{"deactivate", "--help"},
 			want: []string{"Deactivate the current AVM profile or environment"},
 		},
+		{
+			name: "sync",
+			args: []string{"sync", "--help"},
+			want: []string{"Sync the current AVM active profile or environment", "--target"},
+		},
 	}
 
 	for _, tt := range tests {
@@ -92,7 +97,6 @@ func TestSkeletonCommandsReturnNotImplemented(t *testing.T) {
 		want string
 	}{
 		{name: "memory import", args: []string{"memory", "import"}, want: "avm memory import: not implemented"},
-		{name: "shell init", args: []string{"shell", "init", "zsh"}, want: "avm shell init: not implemented"},
 	}
 
 	for _, tt := range tests {
