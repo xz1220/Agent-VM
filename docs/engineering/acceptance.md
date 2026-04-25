@@ -2,15 +2,15 @@
 
 > 最后更新：2026-04-26（v7 — Stage 6 Acceptance Polish）
 
-本文档定义 Phase 1 MVP 的验收标准，并标注当前 `main` 的可执行基线。未合入的 Stage 6 分支能力必须写成 in-progress，不能写成已发布能力。验收重点是 Agent Profile、能力引用、多 runtime Environment 映射、Claude Code/Codex/Cline/Cursor adapter、render mapping 和数据安全。
+本文档定义 Phase 1 MVP 的验收标准，并标注当前 `main` 的可执行基线。验收重点是 Agent Profile、能力引用、多 runtime Environment 映射、Claude Code/Codex/Cline/Cursor adapter、render mapping 和数据安全。
 
 ---
 
 ## 验收原则
 
-1. 当前已合入的 Phase 1 命令可用：`init`、`agent create/list/show`、`env create`、`env create --local`、`memory import --dry-run`、`use/status/deactivate`、`sync`、`shell init`、`export/import`。
+1. 当前已合入的 Phase 1 命令可用：`init`、`agent create/list/show`、`agent show --runtime`、`env create`、`env create --local`、`memory import --dry-run`、`use/status/deactivate`、`sync`、`shell init`、`export/import`。
 2. `~/.avm` 是 Agent Profile 的 source of truth。
-3. `avm init` 当前只写 `~/.avm/**` 默认配置和 state；runtime read-only scan/import-report 属于 Stage 6 in-progress，除非对应分支已合入。
+3. `avm init` 只写 `~/.avm/**` 默认配置和 state，包括 read-only runtime scan 的 `state/import-report.json`；不得修改 runtime 配置。
 4. 不默认覆盖用户 instruction 文件。
 5. adapter 不静默丢字段，必须记录 mapping status。
 6. 写 runtime 文件前有冲突检测和备份。
@@ -47,26 +47,18 @@ avm init
 - 不删除已有 `~/.avm/`。
 - 退出码 1。
 
-### 1.3 Runtime import-report（Stage 6 in-progress）
+### 1.3 Runtime import-report
 
 前置：
 
 - 存在 `~/.codex/config.toml`，包含 profile/MCP。
 - 存在 Claude Code `.claude/agents/reviewer.md`。
 
-当前 `main` 基线：
+预期：
 
-- `avm init` 不扫描 runtime 配置。
-- 不写 `state/import-report.json`。
+- 写入 `state/import-report.json`，包含 version、generated_at、runtimes[]、found/config_dir/version、agent_candidates、warnings/errors。
 - 不创建 imported agent/env。
-- 仍只创建 `~/.avm/**` 默认配置、默认 agent/env 和 `state/sync-state.json`。
-
-Stage 6 目标：
-
-- 导入可识别 profile/agent/MCP。
-- 无法识别字段写入 `runtime_extensions`。
-- 创建 `envs/imported-default.yaml` 引用 confirmed 导入对象，同时保留 `agents/default.yaml` 作为 deactivate 目标。
-- 写入 `state/import-report.json`。
+- 不自动激活 imported candidates。
 - `~/.codex/config.toml` 和 `.claude/agents/reviewer.md` 内容 hash 不变。
 
 ### 1.4 只读初始化
@@ -85,7 +77,7 @@ avm init
 
 - 只创建或修改 `~/.avm/**`。
 - 不创建、不修改、不删除任何 runtime 配置文件。
-- 当前 `main` 不写 runtime import-report；Stage 6 import-report 合入后，报告必须明确区分 confirmed、candidate、runtime_extensions 和 ignored。
+- 写入 `state/import-report.json`，并按 runtime 区分 found、agent candidates、warnings 和 errors。
 
 ---
 
@@ -141,22 +133,17 @@ avm agent list
 - `VERSION`
 - `DESCRIPTION`
 
-### 2.4 映射预览（Stage 6 in-progress）
+### 2.4 映射预览
 
 ```bash
 avm agent show backend-coder --runtime codex
 ```
 
-当前 `main` 基线：
-
-- `--runtime` flag 已存在并校验 runtime 名称。
-- 输出仍是 agent YAML，不展示 adapter mapping preview。
-
-Stage 6 目标：
-
-- 显示 native mappings。
-- 显示 rendered/unsupported mappings。
+- 输出 adapter mapping preview，而不是 agent YAML。
+- 显示 runtime、agent、managed_paths、warnings。
+- 按 native、rendered_as_instructions、ignored、unsupported 分组显示 mappings。
 - 对 memory/skills 在 Codex 中标记 `rendered_as_instructions`。
+- 不调用 adapter Render，不创建或修改 runtime managed files。
 
 ---
 

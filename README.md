@@ -151,13 +151,14 @@ managed activation path are in place.
 Working today:
 
 - `avm init`
-- `avm agent create/list/show`
+- `avm agent create/list/show`, including `avm agent show --runtime <runtime>`
 - `avm env create`, including `avm env create --local`
 - `avm memory import --from <file> --dry-run`
 - `avm use`, `avm status`, and `avm deactivate`
 - `avm sync`
 - `avm shell init bash|zsh|fish`
 - `avm export` and `avm import`
+- `avm init` runtime import/report scan with `state/import-report.json`
 - managed Codex, Claude Code, Cline, and Cursor render outputs
 - config validation and resolution tests
 - adapter contract, fake adapter, and Phase 1 fixtures
@@ -165,11 +166,8 @@ Working today:
 Cursor Phase 1 writes successfully as `synced`; partial support is exposed
 through warnings and mapping status, not a separate Cursor-only sync state.
 
-Stage 6 in progress:
+Still post-MVP or policy follow-up:
 
-- `avm init` runtime import/report scan with `state/import-report.json`
-- `avm agent show --runtime <runtime>` mapping preview; on this branch the flag
-  is accepted, but output remains the agent YAML
 - broader package policy for config/defaults/active state, project overrides,
   runtime outputs, and interactive overwrite/rename
 

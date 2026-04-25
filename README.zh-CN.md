@@ -141,23 +141,22 @@ memory_refs:
 现在可用：
 
 - `avm init`
-- `avm agent create/list/show`
+- `avm agent create/list/show`，包括 `avm agent show --runtime <runtime>`
 - `avm env create`，包括 `avm env create --local`
 - `avm memory import --from <file> --dry-run`
 - `avm use`、`avm status`、`avm deactivate`
 - `avm sync`
 - `avm shell init bash|zsh|fish`
 - `avm export` 和 `avm import`
+- `avm init` runtime import/report scan 和 `state/import-report.json`
 - Codex、Claude Code、Cline 和 Cursor 的 AVM-managed render 输出
 - config validation 和 resolution tests
 - adapter contract、fake adapter、Phase 1 fixtures
 
 Cursor Phase 1 成功写入时状态保持 `synced`；partial support 通过 warnings 和 mapping status 暴露，而不是 Cursor 独有的 sync 状态。
 
-Stage 6 正在建设：
+仍属于 post-MVP 或策略 follow-up：
 
-- `avm init` runtime import/report scan 和 `state/import-report.json`
-- `avm agent show --runtime <runtime>` mapping preview；当前分支接受该 flag，但输出仍是 agent YAML
 - config/defaults/active state、项目覆盖、runtime 输出以及交互式 overwrite/rename 的更完整 package policy
 
 ## 快速开始

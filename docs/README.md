@@ -42,6 +42,6 @@ docs/
 
 ## 当前文档口径
 
-- Stage 5 main 已覆盖 `init`、`agent create/list/show`、`env create`、`env create --local`、`memory import --dry-run`、`use/status/deactivate`、`sync`、`shell init`、`export/import` 的 smoke flow。
+- Stage 6 main 已覆盖 `init`、`agent create/list/show`、`agent show --runtime`、`env create`、`env create --local`、`memory import --dry-run`、`use/status/deactivate`、`sync`、`shell init`、`export/import` 的 smoke flow。
+- `avm init` 会写 `state/import-report.json`，作为 read-only runtime scan 的报告；不会自动写入 imported agent/env，也不会修改 runtime 配置。
 - Cursor Phase 1 成功写入时 runtime status 保持 `synced`；partial support 通过 warnings 和 mapping status 暴露。
-- `avm init` runtime import-report 和 `avm agent show --runtime` mapping preview 属于 Stage 6 in-progress，除非对应分支已经合入 main，不应写成已发布能力。

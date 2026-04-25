@@ -55,6 +55,8 @@ PRD 已明确：Phase 1 不做 `sync --watch`，不做 `workspace_isolation` 主
 | Stage 5 P1-P4 | `DONE` | `origin/feat/acceptance-harness`、`origin/feat/cli-hardening`、`origin/feat/env-hardening`、`origin/feat/package-io` | 各分支 `go test ./...`、`go vet ./...` |
 | Stage 5 P5 | `DONE` | Stage 5 branch integration、acceptance harness 更新、gap report 更新 | `go test ./...`、`go vet ./...`、`git diff --check` |
 | Stage 6 P0 | `DONE` | Acceptance polish 边界决策、prompts、Cursor 状态语义收敛 | `git diff --check` |
+| Stage 6 P1-P3 | `DONE` | `origin/feat/mapping-preview`、`origin/feat/init-import-report`、`origin/feat/docs-polish` | 各分支 `go test ./...`、`go vet ./...` 或 `git diff --check` |
+| Stage 6 P4 | `DONE` | Stage 6 branch integration、README/acceptance 状态修正 | `go test ./...`、`go vet ./...`、CLI smoke |
 
 Round 1 合并后的能力基线：
 
@@ -64,9 +66,9 @@ Round 1 合并后的能力基线：
 - Fixtures 已有 Phase 1 minimal layout。
 - First vertical slice 已可用：`avm init`、`avm agent create/list/show`、`avm env create`、`avm memory import --from <file> --dry-run`。
 
-### 当前阶段：Stage 6 / Acceptance Polish
+### 当前阶段：Post Stage 6 Follow-up
 
-状态：`S6-P0 DONE`。下一步可以并发启动 Stage 6 的三个实现分支：`agent show --runtime` mapping preview、`init` read-only runtime import report、README/examples/docs 对齐。Cursor Phase 1 状态语义已定：成功写入时保持 `synced`，partial 能力边界必须通过 warnings 和 mapping status 明确展示。
+状态：`S6-P4 DONE`。`agent show --runtime` mapping preview、`init` read-only runtime import report、README/examples/docs 对齐都已合并。Cursor Phase 1 状态语义已定：成功写入时保持 `synced`，partial 能力边界必须通过 warnings 和 mapping status 明确展示。
 
 当前 `avm use` 会重建 active、调用 sync、写 sync-state，并可通过 Codex / Claude Code / Cline / Cursor adapters 写入 AVM-managed config。Cursor 仍是 Phase 1 partial adapter，必须通过 warnings 和 mapping status 明确说明能力边界。
 
@@ -94,6 +96,8 @@ Round 1 合并后的能力基线：
 9. `S5-P1/P2/P3/P4 Stage 5 Agents` 已完成：acceptance harness、CLI hardening、env hardening、package IO。
 10. `S5-P5 Lead integration` 已完成：合并 Stage 5 分支、更新 acceptance harness 和 gap report、跑整体验证。
 11. `S6-P0 Lead prep` 已完成：锁定 Cursor 状态语义、拆分 Stage 6 owner 和 prompt。
+12. `S6-P1/P2/P3 Stage 6 Agents` 已完成：mapping preview、init import report、docs polish。
+13. `S6-P4 Lead integration` 已完成：合并 Stage 6 分支、更新 README/acceptance 状态。
 
 Round 3 退出条件：
 
@@ -114,7 +118,7 @@ Round 3 退出条件：
 2. Round 3 已完成，不再启动对应 Agent。
 3. Stage 4 已完成，不再启动对应 Agent。
 4. Stage 5 已完成，不再启动对应 Agent。
-5. Stage 6 的每个子 Agent 必须从最新 `origin/main` 创建独立 worktree 和 branch。
+5. Stage 6 已完成，不再启动对应 Agent。
 6. 每个子 Agent 必须使用独立 `git worktree` 和独立 branch，不允许多个 Agent 直接在同一个 worktree 并发写。
 7. 任何 Agent 需要改 owner 之外的文件时，必须停止并在交付说明里声明，不要自行跨边界修改。
 8. 后续任务优先修复 [stage5-acceptance-gap-report.md](./stage5-acceptance-gap-report.md) 中的 remaining follow-up，不扩大到 `sync --watch`、workspace isolation 或 runtime-native memory 写入。
@@ -129,7 +133,7 @@ git worktree add ../agent-vm-env-hardening -b feat/env-hardening origin/main
 git worktree add ../agent-vm-package-io -b feat/package-io origin/main
 ```
 
-Stage 6 推荐 worktree 形态：
+Stage 6 已执行 worktree 形态（归档，不再启动）：
 
 ```bash
 git fetch origin main
@@ -444,7 +448,7 @@ testdata/
 
 ### Stage 6：Acceptance Polish
 
-标记：`READY`
+标记：`DONE`
 
 任务：
 
@@ -583,12 +587,11 @@ Stage 5 已完成合并。已关闭：
 
 仍保留为后续任务：
 
-- runtime import/report during init。
-- `agent show --runtime` mapping preview。
-- Cursor `synced` + warnings/mapping status 语义写入 README/examples。
 - package scope 是否扩展到 config/active/project override/state/backup/cache/runtime-native memory。
 
-### Stage 6 Agent prompts
+### Stage 6 archived prompts
+
+以下 prompt 是历史记录，不要重新执行。对应分支和结果记录在上方状态表。
 
 #### S6-P1 Mapping Preview prompt
 

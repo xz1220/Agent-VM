@@ -64,10 +64,15 @@ These are still outside the closed Stage 5 scope:
 
 | Area | Current behavior | Follow-up target |
 |------|------------------|------------------|
-| Runtime import during init | Current `main` creates AVM defaults and `sync-state.json`; it does not write an import report | Stage 6 in-progress: read-only scan of runtime configs with `state/import-report.json` |
-| `avm agent show --runtime` | Current `main` accepts and validates `--runtime`, then still shows YAML | Stage 6 in-progress: show native/rendered/unsupported mapping preview |
+| Runtime import during init | Current `main` writes `state/import-report.json` from read-only runtime adapter scan | No automatic imported agent/env write in Phase 1 |
+| `avm agent show --runtime` | Current `main` shows native/rendered/ignored/unsupported mapping preview | Broaden preview only if future adapter fields need it |
 | Cursor status | Runtime status is `synced` with warnings and mapping status | Keep `synced` for successful writes; expose partial support through warnings and mapping status |
 | Package scope | Export/import excludes config/global defaults/active, project env overrides, state/backup/cache, runtime outputs, runtime-native memory, and interactive overwrite/rename | Decide which belong in post-MVP packaging |
+
+## Closed Stage 6 Follow-up
+
+- `avm init` now writes `state/import-report.json` without modifying runtime configs or auto-importing candidates.
+- `avm agent show <name> --runtime <runtime>` now prints mapping preview grouped by native, rendered_as_instructions, ignored, and unsupported mappings.
 
 ## Stage 5 Integration Result
 
