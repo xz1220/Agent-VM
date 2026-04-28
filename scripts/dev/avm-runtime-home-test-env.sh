@@ -181,6 +181,7 @@ avm-delete-test-env() {
 }
 
 avm-activate coding
+eval "\$(avm shell init zsh)"
 
 printf '\\nAVM runtime-home test shell\\n'
 printf '  HOME=%s\\n' "\$HOME"
@@ -193,6 +194,8 @@ printf '  codex\\n'
 printf '  # then run /mcp inside Codex\\n'
 printf '  codex exec --skip-git-repo-check --ephemeral "Reply exactly AVM_CODEX_OK."\\n'
 printf '  claude agents\\n'
+printf '  claude auth status --text\\n'
+printf '  # claude will ask you to log in here if this temporary HOME has no Claude auth\\n'
 printf '\\nCleanup from your normal shell:\\n'
 printf '  %s delete\\n\\n' "$(shell_quote "$script_path")"
 EOF

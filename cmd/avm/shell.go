@@ -83,8 +83,8 @@ esac
 claude() {
   if [ -n "${AVM_CLAUDE_MCP_CONFIG:-}" ] && [ -r "$AVM_CLAUDE_MCP_CONFIG" ]; then
     case " $* " in
-      *" --mcp-config "*) command claude "$@" ;;
-      *) command claude --strict-mcp-config --mcp-config "$AVM_CLAUDE_MCP_CONFIG" "$@" ;;
+      *" --mcp-config "*|*" --mcp-config="*) command claude "$@" ;;
+      *) command claude --strict-mcp-config --mcp-config="$AVM_CLAUDE_MCP_CONFIG" "$@" ;;
     esac
   else
     command claude "$@"
@@ -126,8 +126,8 @@ add-zsh-hook precmd __avm_precmd
 claude() {
   if [ -n "${AVM_CLAUDE_MCP_CONFIG:-}" ] && [ -r "$AVM_CLAUDE_MCP_CONFIG" ]; then
     case " $* " in
-      *" --mcp-config "*) command claude "$@" ;;
-      *) command claude --strict-mcp-config --mcp-config "$AVM_CLAUDE_MCP_CONFIG" "$@" ;;
+      *" --mcp-config "*|*" --mcp-config="*) command claude "$@" ;;
+      *) command claude --strict-mcp-config --mcp-config="$AVM_CLAUDE_MCP_CONFIG" "$@" ;;
     esac
   else
     command claude "$@"
@@ -170,10 +170,17 @@ end
 
 function claude
     if set -q AVM_CLAUDE_MCP_CONFIG; and test -r "$AVM_CLAUDE_MCP_CONFIG"
-        if contains -- --mcp-config $argv
+        set -l has_mcp_config 0
+        for arg in $argv
+            switch $arg
+                case --mcp-config '--mcp-config=*'
+                    set has_mcp_config 1
+            end
+        end
+        if test "$has_mcp_config" = 1
             command claude $argv
         else
-            command claude --strict-mcp-config --mcp-config "$AVM_CLAUDE_MCP_CONFIG" $argv
+            command claude --strict-mcp-config --mcp-config="$AVM_CLAUDE_MCP_CONFIG" $argv
         end
     else
         command claude $argv
