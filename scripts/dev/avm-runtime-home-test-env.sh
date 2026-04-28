@@ -7,7 +7,7 @@ STATE_DIR="$(git -C "$REPO_ROOT" rev-parse --git-path avm-runtime-home-test-env 
 STATE_FILE="$STATE_DIR/state"
 
 CODEX_MODEL="${AVM_TEST_CODEX_MODEL:-gpt-5.4-mini}"
-CLAUDE_MODEL="${AVM_TEST_CLAUDE_MODEL:-claude-sonnet-4}"
+CLAUDE_MODEL="${AVM_TEST_CLAUDE_MODEL:-sonnet}"
 SUPERPOWERS_REPO="${AVM_TEST_SUPERPOWERS_REPO:-https://github.com/obra/superpowers.git}"
 SUPERPOWERS_REF="${AVM_TEST_SUPERPOWERS_REF:-main}"
 
@@ -22,6 +22,7 @@ Usage:
 
 Options:
   AVM_TEST_SHELL=zsh|bash       Override the shell used by start/enter.
+  AVM_TEST_CLAUDE_MODEL=sonnet  Override the Claude Code agent model.
 
 Inside the test shell, use AVM normally:
   avm agent list
@@ -247,6 +248,11 @@ if [ -n "\${ANTHROPIC_AUTH_TOKEN:-}" ]; then
   printf '  ANTHROPIC_AUTH_TOKEN=set\\n'
 else
   printf '  ANTHROPIC_AUTH_TOKEN=unset\\n'
+fi
+if [ -n "\${ANTHROPIC_BASE_URL:-}" ]; then
+  printf '  ANTHROPIC_BASE_URL=set\\n'
+else
+  printf '  ANTHROPIC_BASE_URL=unset\\n'
 fi
 printf '  skills=%s\\n' $(shell_quote "$skills")
 printf '\\nTry:\\n'
