@@ -162,16 +162,6 @@ func readAgentPreferProject(name, cwd string) (*AgentProfile, string, error) {
 }
 
 func targetsForProfile(agent *AgentProfile) ([]string, []string, error) {
-	cfg, err := ReadGlobalConfig()
-	if err == nil {
-		if len(cfg.Defaults.Targets) > 0 {
-			return cloneStringSlice(cfg.Defaults.Targets), []string{GlobalConfigPath()}, nil
-		}
-		return []string{agent.Runtime.Preferred}, []string{GlobalConfigPath()}, nil
-	}
-	if !os.IsNotExist(err) {
-		return nil, nil, err
-	}
 	return []string{agent.Runtime.Preferred}, nil, nil
 }
 

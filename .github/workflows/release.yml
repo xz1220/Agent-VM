@@ -1,0 +1,40 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+      - run: |
+          set -eu
+          mkdir -p dist
+          for target in darwin/arm64 darwin/amd64 linux/arm64 linux/amd64; do
+            os="${target%/*}"
+            arch="${target#*/}"
+            asset_arch="$arch"
+            if [ "$arch" = "amd64" ]; then
+              asset_arch="x86_64"
+            fi
+            work="dist/avm_${os}_${asset_arch}"
+            mkdir -p "$work"
+            GOOS="$os" GOARCH="$arch" go build -trimpath -ldflags="-s -w" -o "$work/avm" ./cmd/avm
+            tar -C "$work" -czf "dist/avm_${os}_${asset_arch}.tar.gz" avm
+          done
+          cd dist
+          sha256sum *.tar.gz > checksums.txt
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.tar.gz
+            dist/checksums.txt

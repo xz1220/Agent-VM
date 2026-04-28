@@ -34,21 +34,24 @@ Phase 1 rules/MCP PoC.
 ## The Move
 
 ```bash
-avm use backend-coder
+avm create backend-coder
+eval "$(avm activate backend-coder)"
 ```
 
-That command should become the muscle memory for switching your local AI coding
-setup. Instead of rebuilding the same role across prompt files, MCP config,
+Create an agent from a package, activate it in the current shell, then start the
+runtime. Instead of rebuilding the same role across prompt files, MCP config,
 rules directories, and memory notes, AVM makes the agent profile the source of
-truth.
+truth. `avm use` remains available for explicit profile/env activation and sync.
 
 ```text
-backend-coder.yaml
-  -> avm use backend-coder
-    -> Codex profile
-    -> Claude Code agent
-    -> Cline rules/MCP settings
-    -> Cursor rules/MCP PoC
+backend-coder package
+  -> avm create backend-coder
+    -> backend-coder.yaml
+      -> eval "$(avm activate backend-coder)"
+        -> Codex profile
+        -> Claude Code agent
+        -> Cline rules/MCP settings
+        -> Cursor rules/MCP PoC
 ```
 
 ## Why This Is Different
@@ -151,13 +154,15 @@ managed activation path are in place.
 Working today:
 
 - `avm init`
+- `avm create <package>` for first-run profile creation
+- `avm package list/show` for built-in create packages
 - `avm agent create/list/show`, including `avm agent show --runtime <runtime>`
 - `avm env create`, including `avm env create --local`
 - `avm memory import --from <file> --dry-run`
 - `avm use`, `avm status`, and `avm deactivate`
 - `avm sync`
 - `avm shell init bash|zsh|fish`
-- `avm export` and `avm import`
+- `avm export`, `avm import`, and `avm install <file.avm.zip>`
 - `avm init` runtime import/report scan with `state/import-report.json`
 - managed Codex, Claude Code, Cline, and Cursor render outputs
 - config validation and resolution tests
@@ -173,18 +178,38 @@ Still post-MVP or policy follow-up:
 
 ## Quickstart
 
-Prerequisites:
+Install a tagged preview release:
 
-- Go 1.22+
+```bash
+curl -fsSL https://raw.githubusercontent.com/xz1220/Agent-VM/main/scripts/install.sh | sh
+```
 
-Run from source:
+Create your first agent from a package:
+
+```bash
+avm create backend-coder
+```
+
+Use it in the current shell, then start your runtime:
+
+```bash
+eval "$(avm activate backend-coder)"
+codex
+```
+
+Inspect available packages:
+
+```bash
+avm package list
+avm package show reviewer
+```
+
+Run from source for development or local testing:
 
 ```bash
 git clone https://github.com/xz1220/Agent-VM.git
 cd Agent-VM
-
-go run ./cmd/avm --help
-go run ./cmd/avm init
+go run ./cmd/avm create backend-coder --yes
 ```
 
 For a local smoke run without installed runtime CLIs, create the runtime config
@@ -197,7 +222,7 @@ mkdir -p "$HOME/.codex" "$HOME/.claude" "$HOME/.cline/data" .cursor
 Create and inspect profiles:
 
 ```bash
-go run ./cmd/avm agent create backend-coder \
+avm agent create backend-coder \
   --runtime codex \
   --model gpt-5.4 \
   --reasoning high \
@@ -205,30 +230,30 @@ go run ./cmd/avm agent create backend-coder \
   --mcps github \
   --memory backend-standards:project
 
-go run ./cmd/avm agent create reviewer --runtime claude-code --skills review
-go run ./cmd/avm agent create cline-helper --runtime cline --skills test
-go run ./cmd/avm agent create cursor-helper --runtime cursor --skills rules
+avm agent create reviewer --runtime claude-code --skills review
+avm agent create cline-helper --runtime cline --skills test
+avm agent create cursor-helper --runtime cursor --skills rules
 
-go run ./cmd/avm agent list
-go run ./cmd/avm agent show backend-coder
+avm agent list
+avm agent show backend-coder
 ```
 
 Create environments:
 
 ```bash
-go run ./cmd/avm env create all-runtimes \
+avm env create all-runtimes \
   --codex backend-coder \
   --claude-code reviewer \
   --cline cline-helper \
   --cursor cursor-helper
 
-go run ./cmd/avm env create all-runtimes --local --codex backend-coder
+avm env create all-runtimes --local --codex backend-coder
 ```
 
 Preview a portable memory import:
 
 ```bash
-go run ./cmd/avm memory import \
+avm memory import \
   --from testdata/memory/backend-standards.md \
   --dry-run \
   --format json
@@ -237,23 +262,23 @@ go run ./cmd/avm memory import \
 Activate, inspect, resync, and deactivate:
 
 ```bash
-go run ./cmd/avm use --kind env all-runtimes
-go run ./cmd/avm status
-go run ./cmd/avm sync
-go run ./cmd/avm deactivate
+avm use --kind env all-runtimes
+avm status
+avm sync
+avm deactivate
 ```
 
 Shell prompt integration prints eval-safe snippets:
 
 ```bash
-eval "$(go run ./cmd/avm shell init zsh)"
+eval "$(avm shell init zsh)"
 ```
 
-Export and import packages:
+Export and install packages:
 
 ```bash
-go run ./cmd/avm export backend-coder --kind agent --output backend-coder.avm.zip
-go run ./cmd/avm import backend-coder.avm.zip
+avm export backend-coder --kind agent --output backend-coder.avm.zip
+avm install backend-coder.avm.zip
 ```
 
 Build locally:
@@ -268,9 +293,8 @@ make build
 The current activation loop is:
 
 ```bash
-avm init
-avm agent create backend-coder --runtime codex --skills git,test
-avm use backend-coder
+avm create backend-coder
+eval "$(avm activate backend-coder)"
 avm status
 ```
 
@@ -282,10 +306,11 @@ runtime status:
   codex: synced (agent backend-coder)
 managed paths:
   codex:
-    - ~/.codex/config.toml owner=shared-section merge=structured-section
+    - ~/.avm/runtime-homes/profile-backend-coder/codex/config.toml owner=avm merge=whole-file
+    - ~/.avm/runtime-homes/profile-backend-coder/codex/agents/backend-coder.toml owner=avm merge=whole-file
 mapping status:
   codex:
-    - capabilities.skills -> instructions: rendered_as_instructions
+    - capabilities.skills -> .../agents/backend-coder.toml#developer_instructions: rendered_as_instructions
 warnings:
   none
 ```
@@ -294,7 +319,7 @@ warnings:
 
 AVM is designed to be conservative by default:
 
-- `avm init` only writes under `~/.avm`.
+- installer initialization and `avm init` only write under `~/.avm`.
 - Runtime-native memory is imported only through explicit commands.
 - Memory import supports dry-run reporting before writes.
 - Adapters own explicit managed paths.

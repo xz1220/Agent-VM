@@ -23,6 +23,9 @@ func newActivateCommand() *cobra.Command {
 }
 
 func runActivate(cmd *cobra.Command, args []string) error {
+	if err := ensureInitialized(); err != nil {
+		return err
+	}
 	cwd, err := os.Getwd()
 	if err != nil {
 		return err

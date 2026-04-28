@@ -102,7 +102,7 @@ func TestAgentCreateListShow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("agent list returned error: %v", err)
 	}
-	if want := "NAME\tSCOPE\tVERSION\tDESCRIPTION\nbackend-coder\tglobal\t1.0.0\t\n"; listOut != want {
+	if want := "NAME\tSCOPE\tVERSION\tDESCRIPTION\nbackend-coder\tglobal\t1.0.0\t\ndefault\tglobal\t1.0.0\t\n"; listOut != want {
 		t.Fatalf("unexpected list output:\n got: %q\nwant: %q", listOut, want)
 	}
 

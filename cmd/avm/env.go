@@ -51,6 +51,9 @@ func validateEnvCreateArgs(cmd *cobra.Command, args []string) error {
 }
 
 func runEnvCreate(cmd *cobra.Command, args []string) error {
+	if err := ensureInitialized(); err != nil {
+		return err
+	}
 	local, err := cmd.Flags().GetBool("local")
 	if err != nil {
 		return err

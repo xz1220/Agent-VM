@@ -33,12 +33,9 @@ func TestUseStatusDeactivateCommands(t *testing.T) {
 	wantUse := "active: profile:backend-coder\n" +
 		"sync: completed\n" +
 		"targets:\n" +
-		"  claude-code: skipped\n" +
-		"  cline: skipped\n" +
 		"  codex: synced\n" +
 		"warnings:\n" +
-		"  - claude-code: target has no resolved agent\n" +
-		"  - cline: target has no resolved agent\n"
+		"  none\n"
 	if useOut != wantUse {
 		t.Fatalf("unexpected use output:\n got: %q\nwant: %q", useOut, wantUse)
 	}
@@ -68,18 +65,12 @@ func TestUseStatusDeactivateCommands(t *testing.T) {
 	configPath := filepath.ToSlash(filepath.Join(codexHome, "config.toml"))
 	wantStatus := fmt.Sprintf("active: profile:backend-coder\n"+
 		"runtime status:\n"+
-		"  claude-code: skipped\n"+
-		"  cline: skipped\n"+
 		"  codex: synced (agent backend-coder)\n"+
 		"managed paths:\n"+
-		"  claude-code: none\n"+
-		"  cline: none\n"+
 		"  codex:\n"+
 		"    - %s owner=avm merge=whole-file\n"+
 		"    - %s owner=avm merge=whole-file\n"+
 		"mapping status:\n"+
-		"  claude-code: none\n"+
-		"  cline: none\n"+
 		"  codex:\n"+
 		"    - active -> profiles.avm-backend-coder: native\n"+
 		"    - agent.description -> agents.backend-coder.description: native\n"+
@@ -95,8 +86,7 @@ func TestUseStatusDeactivateCommands(t *testing.T) {
 		"    - capabilities.skills -> %s#developer_instructions: rendered_as_instructions (Codex has no native AVM skill registry mount in Phase 1.)\n"+
 		"    - project.AGENTS.md: ignored (Codex project instructions are user-owned; the Codex adapter does not overwrite AGENTS.md.)\n"+
 		"warnings:\n"+
-		"  - claude-code: target has no resolved agent\n"+
-		"  - cline: target has no resolved agent\n", rolePath, configPath, rolePath, rolePath, rolePath, rolePath, rolePath)
+		"  none\n", rolePath, configPath, rolePath, rolePath, rolePath, rolePath, rolePath)
 	if statusOut != wantStatus {
 		t.Fatalf("unexpected status output:\n got: %q\nwant: %q", statusOut, wantStatus)
 	}
@@ -108,12 +98,9 @@ func TestUseStatusDeactivateCommands(t *testing.T) {
 	wantDeactivate := "active: profile:default\n" +
 		"sync: completed\n" +
 		"targets:\n" +
-		"  claude-code: skipped\n" +
-		"  cline: skipped\n" +
 		"  codex: synced\n" +
 		"warnings:\n" +
-		"  - claude-code: target has no resolved agent\n" +
-		"  - cline: target has no resolved agent\n"
+		"  none\n"
 	if deactivateOut != wantDeactivate {
 		t.Fatalf("unexpected deactivate output:\n got: %q\nwant: %q", deactivateOut, wantDeactivate)
 	}
