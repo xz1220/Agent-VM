@@ -13,15 +13,15 @@ func newExportCommand() *cobra.Command {
 	var kind string
 
 	cmd := &cobra.Command{
-		Use:   "export <agent-or-env>",
-		Short: "Export an AVM agent profile or environment package",
+		Use:   "export <agent>",
+		Short: "Export an AVM agent package",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runExport(cmd, args[0], output, kind)
 		},
 	}
 	cmd.Flags().StringVar(&output, "output", "", "output .avm.zip file")
-	cmd.Flags().StringVar(&kind, "kind", "", "export kind: agent or env")
+	cmd.Flags().StringVar(&kind, "kind", "", "export kind: agent (default) or env")
 	return cmd
 }
 
