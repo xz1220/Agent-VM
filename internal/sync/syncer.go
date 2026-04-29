@@ -559,7 +559,7 @@ func codexSidecarSourceDirs(runtimeHome string) []string {
 	if envHome := strings.TrimSpace(os.Getenv("CODEX_HOME")); envHome != "" {
 		dirs = append(dirs, envHome)
 	}
-	if userHome, err := os.UserHomeDir(); err == nil && userHome != "" {
+	for _, userHome := range runtimeSidecarUserHomes() {
 		dirs = append(dirs, filepath.Join(userHome, ".codex"))
 	}
 	return uniqueCleanPaths(dirs)
@@ -570,10 +570,21 @@ func claudeSidecarSourceDirs(runtimeHome string) []string {
 	if envHome := strings.TrimSpace(os.Getenv("CLAUDE_CONFIG_DIR")); envHome != "" {
 		dirs = append(dirs, envHome)
 	}
-	if userHome, err := os.UserHomeDir(); err == nil && userHome != "" {
+	for _, userHome := range runtimeSidecarUserHomes() {
 		dirs = append(dirs, filepath.Join(userHome, ".claude"))
 	}
 	return uniqueCleanPaths(dirs)
+}
+
+func runtimeSidecarUserHomes() []string {
+	var homes []string
+	if userHome, err := os.UserHomeDir(); err == nil && strings.TrimSpace(userHome) != "" {
+		homes = append(homes, userHome)
+	}
+	if realHome := strings.TrimSpace(os.Getenv("AVM_REAL_HOME")); realHome != "" {
+		homes = append(homes, realHome)
+	}
+	return uniqueCleanPaths(homes)
 }
 
 func captureNamedSidecars(relPaths []string, sourceDirs []string) ([]runtimeHomeSidecar, error) {

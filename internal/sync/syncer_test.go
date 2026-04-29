@@ -212,6 +212,47 @@ func TestSyncActivationCleansStaleRuntimeSkillsFromPreviousActivation(t *testing
 	assertFileContains(t, userSkillPath, "user-owned")
 }
 
+func TestRuntimeHomeSidecarsUseRealHomeFallback(t *testing.T) {
+	dir := t.TempDir()
+	isolatedHome := filepath.Join(dir, "isolated-home")
+	realHome := filepath.Join(dir, "real-home")
+	t.Setenv("HOME", isolatedHome)
+	t.Setenv("AVM_REAL_HOME", realHome)
+	t.Setenv("CODEX_HOME", "")
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+
+	writeTestFile(t, filepath.Join(realHome, ".codex", "auth.json"), "codex-auth\n")
+	writeTestFile(t, filepath.Join(realHome, ".claude", ".credentials.json"), "claude-credentials\n")
+	writeTestFile(t, filepath.Join(realHome, ".claude", "config.json"), "claude-config\n")
+
+	codexHome := filepath.Join(dir, "runtime-codex")
+	codexSidecars, err := captureRuntimeHomeSidecars("codex", codexHome)
+	if err != nil {
+		t.Fatalf("capture codex sidecars: %v", err)
+	}
+	if err := resetRuntimeHome(codexHome); err != nil {
+		t.Fatalf("reset codex home: %v", err)
+	}
+	if err := restoreRuntimeHomeSidecars(codexHome, codexSidecars); err != nil {
+		t.Fatalf("restore codex sidecars: %v", err)
+	}
+	assertFileContains(t, filepath.Join(codexHome, "auth.json"), "codex-auth")
+
+	claudeHome := filepath.Join(dir, "runtime-claude")
+	claudeSidecars, err := captureRuntimeHomeSidecars("claude-code", claudeHome)
+	if err != nil {
+		t.Fatalf("capture claude sidecars: %v", err)
+	}
+	if err := resetRuntimeHome(claudeHome); err != nil {
+		t.Fatalf("reset claude home: %v", err)
+	}
+	if err := restoreRuntimeHomeSidecars(claudeHome, claudeSidecars); err != nil {
+		t.Fatalf("restore claude sidecars: %v", err)
+	}
+	assertFileContains(t, filepath.Join(claudeHome, ".credentials.json"), "claude-credentials")
+	assertFileContains(t, filepath.Join(claudeHome, "config.json"), "claude-config")
+}
+
 func testSyncer() *Syncer {
 	syncer := NewSyncer(StaticAdapterRegistry{
 		"fake": fake.New(fake.WithName("fake")),
@@ -287,5 +328,15 @@ func assertFileContains(t *testing.T, path, expected string) {
 	}
 	if !strings.Contains(string(raw), expected) {
 		t.Fatalf("%s did not contain %q:\n%s", path, expected, string(raw))
+	}
+}
+
+func writeTestFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("create %s: %v", filepath.Dir(path), err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("write %s: %v", path, err)
 	}
 }
