@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -67,26 +68,32 @@ func bootstrapRuntimeRegistry(report initImportReport) (*runtimeRegistryBootstra
 
 func scanRuntimeSkillSources(runtimeName, configDir, cwd string) []nativeSkillSource {
 	var roots []string
-	home, _ := os.UserHomeDir()
+	homes := runtimeScanHomeDirs()
+	addHomeRoot := func(parts ...string) {
+		for _, home := range homes {
+			roots = append(roots, filepath.Join(append([]string{home}, parts...)...))
+		}
+	}
+	addCommonHomeRoots := func() {
+		addHomeRoot(".agents", "skills")
+		addHomeRoot(".cc-switch", "skills")
+	}
 	switch runtimeName {
 	case "codex":
 		roots = append(roots, filepath.Join(configDir, "skills"))
-		if home != "" {
-			roots = append(roots, filepath.Join(home, ".codex", "skills"))
-		}
+		addHomeRoot(".codex", "skills")
+		addCommonHomeRoots()
 	case "claude-code":
 		roots = append(roots, filepath.Join(configDir, "skills"))
-		if home != "" {
-			roots = append(roots, filepath.Join(home, ".claude", "skills"))
-		}
+		addHomeRoot(".claude", "skills")
+		addCommonHomeRoots()
 		if cwd != "" {
 			roots = append(roots, filepath.Join(cwd, ".claude", "skills"))
 		}
 	case "opencode":
 		roots = append(roots, filepath.Join(configDir, "skills"))
-		if home != "" {
-			roots = append(roots, filepath.Join(home, ".config", "opencode", "skills"))
-		}
+		addHomeRoot(".config", "opencode", "skills")
+		addCommonHomeRoots()
 		if cwd != "" {
 			roots = append(roots, filepath.Join(cwd, ".opencode", "skills"))
 		}
@@ -113,32 +120,71 @@ func scanRuntimeSkillSources(runtimeName, configDir, cwd string) []nativeSkillSo
 	return out
 }
 
+func runtimeScanHomeDirs() []string {
+	var candidates []string
+	if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
+		candidates = append(candidates, home)
+	}
+	if realHome := strings.TrimSpace(os.Getenv("AVM_REAL_HOME")); realHome != "" {
+		candidates = append(candidates, realHome)
+	}
+
+	seen := map[string]struct{}{}
+	var out []string
+	for _, candidate := range candidates {
+		cleaned, err := filepath.Abs(filepath.Clean(candidate))
+		if err != nil {
+			continue
+		}
+		if _, ok := seen[cleaned]; ok {
+			continue
+		}
+		seen[cleaned] = struct{}{}
+		out = append(out, cleaned)
+	}
+	return out
+}
+
 func scanSkillRoot(root string) []nativeSkillSource {
 	if root == "" || pathInsideDir(root, config.AvmDir()) {
 		return nil
 	}
-	entries, err := os.ReadDir(root)
-	if err != nil {
+	info, err := os.Stat(root)
+	if err != nil || !info.IsDir() {
 		return nil
 	}
 	var out []nativeSkillSource
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
+	_ = filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil || !entry.IsDir() {
+			return nil
 		}
-		name := safeCreateName(entry.Name())
-		if name == "" {
-			continue
+		if path == root {
+			return nil
 		}
-		sourcePath := filepath.Join(root, entry.Name(), "SKILL.md")
+		if pathInsideDir(path, config.AvmDir()) {
+			return filepath.SkipDir
+		}
+
+		sourcePath := filepath.Join(path, "SKILL.md")
 		if _, err := os.Stat(sourcePath); err != nil {
-			continue
+			return nil
 		}
 		if pathInsideDir(sourcePath, config.AvmDir()) {
-			continue
+			return filepath.SkipDir
+		}
+		name := safeCreateName(filepath.Base(path))
+		if name == "" {
+			return filepath.SkipDir
 		}
 		out = append(out, nativeSkillSource{Name: name, SourcePath: sourcePath})
-	}
+		return filepath.SkipDir
+	})
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Name != out[j].Name {
+			return out[i].Name < out[j].Name
+		}
+		return out[i].SourcePath < out[j].SourcePath
+	})
 	return out
 }
 

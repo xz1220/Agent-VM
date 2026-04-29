@@ -77,11 +77,16 @@ func TestRuntimeScanRefreshesReport(t *testing.T) {
 
 func TestRuntimeScanBootstrapsNativeSkillsAndMCPs(t *testing.T) {
 	home := t.TempDir()
+	realHome := t.TempDir()
 	project := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("AVM_REAL_HOME", realHome)
 	chdir(t, project)
 
 	writeFileForTest(t, filepath.Join(home, ".codex", "skills", "codex-probe", "SKILL.md"), "# Codex Probe\n\nCodex skill.\n")
+	writeFileForTest(t, filepath.Join(realHome, ".codex", "skills", ".system", "openai-docs", "SKILL.md"), "# OpenAI Docs\n\nOpenAI docs skill.\n")
+	writeFileForTest(t, filepath.Join(realHome, ".agents", "skills", "lark-doc", "SKILL.md"), "# Lark Doc\n\nLark doc skill.\n")
+	writeFileForTest(t, filepath.Join(realHome, ".cc-switch", "skills", "lark-base", "SKILL.md"), "# Lark Base\n\nLark base skill.\n")
 	writeFileForTest(t, filepath.Join(home, ".codex", "config.toml"), `[mcp_servers.github]
 command = "gh"
 args = ["mcp", "serve"]
@@ -96,7 +101,7 @@ env = { GITHUB_TOKEN = "${GITHUB_TOKEN}" }
 	if err != nil {
 		t.Fatalf("runtime scan returned error: %v\n%s", err, out)
 	}
-	for _, name := range []string{"codex-probe", "claude-probe", "opencode-probe"} {
+	for _, name := range []string{"codex-probe", "openai-docs", "lark-doc", "lark-base", "claude-probe", "opencode-probe"} {
 		if _, err := os.Stat(config.SkillRegistryFilePath(name)); err != nil {
 			t.Fatalf("skill %s was not bootstrapped: %v", name, err)
 		}
