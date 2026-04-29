@@ -219,6 +219,15 @@ type PortableMemorySummary struct {
 	Description string
 }
 
+type MCPRegistrySummary struct {
+	Name        string
+	Description string
+	Type        string
+	Command     string
+	URL         string
+	Path        string
+}
+
 func (c *GlobalConfig) ApplyDefaults() {
 	if c.Version == "" {
 		c.Version = "1"

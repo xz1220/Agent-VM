@@ -1,6 +1,9 @@
 package config
 
-import "sort"
+import (
+	"os"
+	"sort"
+)
 
 func ReadPortableMemory(id string, scope Scope) (*PortableMemory, error) {
 	if !validName(id) {
@@ -41,6 +44,16 @@ func WritePortableMemory(memory *PortableMemory) error {
 		return err
 	}
 	return writeYAML(path, memory)
+}
+
+func DeletePortableMemory(id string, scope Scope) error {
+	if !validName(id) {
+		return fieldError("", "id", "invalid id %q", id)
+	}
+	if !validMemoryScope(string(scope)) {
+		return fieldError("", "scope", "invalid value %q", scope)
+	}
+	return os.Remove(MemoryPath(id, scope))
 }
 
 func ListPortableMemory(scope Scope) ([]PortableMemorySummary, error) {

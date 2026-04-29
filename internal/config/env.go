@@ -1,6 +1,9 @@
 package config
 
-import "sort"
+import (
+	"os"
+	"sort"
+)
 
 func ReadEnvironment(name string) (*Environment, error) {
 	if !validName(name) {
@@ -37,6 +40,13 @@ func WriteEnvironment(env *Environment) error {
 	return writeYAML(path, env)
 }
 
+func DeleteEnvironment(name string) error {
+	if !validName(name) {
+		return fieldError("", "name", "invalid name %q", name)
+	}
+	return os.Remove(EnvPath(name))
+}
+
 func ReadProjectOverride(cwd string) (*ProjectOverride, error) {
 	return readProjectOverride(ProjectEnvPath(cwd))
 }
@@ -50,6 +60,10 @@ func WriteProjectOverride(cwd string, override *ProjectOverride) error {
 		return err
 	}
 	return writeYAML(path, override)
+}
+
+func DeleteProjectOverride(cwd string) error {
+	return os.Remove(ProjectEnvPath(cwd))
 }
 
 func ListEnvironments() ([]EnvironmentSummary, error) {

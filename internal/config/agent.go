@@ -1,6 +1,9 @@
 package config
 
-import "sort"
+import (
+	"os"
+	"sort"
+)
 
 func ReadAgent(name string, scope Scope, cwd string) (*AgentProfile, error) {
 	if !validName(name) {
@@ -41,6 +44,17 @@ func WriteAgent(agent *AgentProfile, scope Scope, cwd string) error {
 		return err
 	}
 	return writeYAML(path, agent)
+}
+
+func DeleteAgent(name string, scope Scope, cwd string) error {
+	if !validName(name) {
+		return fieldError("", "name", "invalid name %q", name)
+	}
+	path, err := agentPathForScope(name, scope, cwd)
+	if err != nil {
+		return err
+	}
+	return os.Remove(path)
 }
 
 func ListAgents(scope Scope, cwd string) ([]AgentSummary, error) {
