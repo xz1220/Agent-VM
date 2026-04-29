@@ -157,7 +157,7 @@ Working today:
 
 - `avm init`
 - `avm create <package>`, `avm create --from <profile>`, and `avm create --from-import <runtime>/<candidate>` for first-run profile creation
-- `avm package list/show` for built-in create packages
+- `avm package list/show` for built-in create packages, plus `avm package inspect <file.avm.zip>` for portable agent packages
 - `avm skill list` for installed skill inventory
 - `avm runtime list/scan` for runtime detection and import candidates
 - `avm agent create/list/show`, including `avm agent show --runtime <runtime>`
@@ -166,7 +166,7 @@ Working today:
 - `avm use`, `avm status`, and `avm deactivate`
 - `avm sync`
 - `avm shell init bash|zsh|fish`
-- `avm export`, `avm import`, and `avm install <file.avm.zip>`
+- `avm export <agent>`, `avm import`, and `avm install <file.avm.zip>`
 - `avm init` runtime import/report scan with `state/import-report.json`
 - managed Codex, Claude Code, OpenCode, Cline, and Cursor render outputs
 - config validation and resolution tests
@@ -340,7 +340,9 @@ eval "$(avm shell init zsh)"
 Export and install packages:
 
 ```bash
-avm export backend-coder --kind agent --output backend-coder.avm.zip
+avm export backend-coder --output backend-coder.avm.zip
+avm package inspect backend-coder.avm.zip
+avm install --dry-run backend-coder.avm.zip
 avm install backend-coder.avm.zip
 ```
 

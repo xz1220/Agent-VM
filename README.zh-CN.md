@@ -146,7 +146,7 @@ memory_refs:
 
 - `avm init`
 - `avm create <package>`、`avm create --from <profile>`、`avm create --from-import <runtime>/<candidate>`，用于首次创建 profile
-- `avm package list/show`，用于查看内置 create package
+- `avm package list/show`，用于查看内置 create package；`avm package inspect <file.avm.zip>` 用于查看可分发 agent package
 - `avm skill list`，用于查看已安装 skills
 - `avm runtime list/scan`，用于查看 runtime 探测结果和可导入候选项
 - `avm agent create/list/show`，包括 `avm agent show --runtime <runtime>`
@@ -155,7 +155,7 @@ memory_refs:
 - `avm use`、`avm status`、`avm deactivate`
 - `avm sync`
 - `avm shell init bash|zsh|fish`
-- `avm export`、`avm import` 和 `avm install <file.avm.zip>`
+- `avm export <agent>`、`avm import` 和 `avm install <file.avm.zip>`
 - `avm init` runtime import/report scan 和 `state/import-report.json`
 - Codex、Claude Code、OpenCode、Cline 和 Cursor 的 AVM-managed render 输出
 - config validation 和 resolution tests
@@ -323,7 +323,9 @@ eval "$(avm shell init zsh)"
 导出和安装 package：
 
 ```bash
-avm export backend-coder --kind agent --output backend-coder.avm.zip
+avm export backend-coder --output backend-coder.avm.zip
+avm package inspect backend-coder.avm.zip
+avm install --dry-run backend-coder.avm.zip
 avm install backend-coder.avm.zip
 ```
 

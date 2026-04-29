@@ -36,7 +36,7 @@ func TestRegisteredCommandHelp(t *testing.T) {
 		{
 			name: "package",
 			args: []string{"package", "--help"},
-			want: []string{"list", "show"},
+			want: []string{"inspect", "list", "show"},
 		},
 		{
 			name: "skill",
@@ -71,7 +71,7 @@ func TestRegisteredCommandHelp(t *testing.T) {
 		{
 			name: "export",
 			args: []string{"export", "--help"},
-			want: []string{"export <agent-or-env>", "--output", "--kind"},
+			want: []string{"export <agent>", "--output", "--kind"},
 		},
 		{
 			name: "import",
@@ -81,7 +81,7 @@ func TestRegisteredCommandHelp(t *testing.T) {
 		{
 			name: "install",
 			args: []string{"install", "--help"},
-			want: []string{"install <file.avm.zip>"},
+			want: []string{"install <file.avm.zip>", "--dry-run"},
 		},
 		{
 			name: "activate",

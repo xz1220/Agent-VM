@@ -54,6 +54,26 @@ func TestPackageAgentExportImportWithReferencedMetadata(t *testing.T) {
 		t.Fatalf("export returned error: %v\n%s", err, out)
 	}
 
+	inspectOut, err := executeCommand("package", "inspect", packagePath)
+	if err != nil {
+		t.Fatalf("package inspect returned error: %v\n%s", err, inspectOut)
+	}
+	for _, want := range []string{
+		"package: agent backend-coder",
+		"agents:",
+		"  backend-coder",
+		"skills:",
+		"  git",
+		"mcps:",
+		"  github",
+		"files:",
+		"  agents/backend-coder.yaml",
+	} {
+		if !strings.Contains(inspectOut, want) {
+			t.Fatalf("package inspect output missing %q:\n%s", want, inspectOut)
+		}
+	}
+
 	names := zipEntryNames(t, packagePath)
 	for _, want := range []string{
 		"manifest.yaml",
@@ -71,6 +91,27 @@ func TestPackageAgentExportImportWithReferencedMetadata(t *testing.T) {
 
 	targetHome := t.TempDir()
 	t.Setenv("HOME", targetHome)
+	dryRunOut, err := executeCommand("install", "--dry-run", packagePath)
+	if err != nil {
+		t.Fatalf("install dry-run returned error: %v\n%s", err, dryRunOut)
+	}
+	for _, want := range []string{
+		"install plan for agent backend-coder: add",
+		"would add:",
+		"agents/backend-coder.yaml",
+		"conflict 0",
+	} {
+		if !strings.Contains(dryRunOut, want) {
+			t.Fatalf("install dry-run output missing %q:\n%s", want, dryRunOut)
+		}
+	}
+	if _, err := config.ReadAgent("backend-coder", config.ScopeGlobal, project); !os.IsNotExist(err) {
+		t.Fatalf("dry-run should not write agent, err = %v", err)
+	}
+	if _, err := config.ReadGlobalConfig(); !os.IsNotExist(err) {
+		t.Fatalf("dry-run should not lazy initialize global config, err = %v", err)
+	}
+
 	out, err := executeCommand("import", packagePath)
 	if err != nil {
 		t.Fatalf("import returned error: %v\n%s", err, out)
@@ -135,7 +176,7 @@ func TestPackageEnvExportImportIncludesReferencedAgents(t *testing.T) {
 	}
 
 	packagePath := filepath.Join(t.TempDir(), "coding.avm.zip")
-	if out, err := executeCommand("export", "coding", "--output", packagePath); err != nil {
+	if out, err := executeCommand("export", "coding", "--kind", "env", "--output", packagePath); err != nil {
 		t.Fatalf("env export returned error: %v\n%s", err, out)
 	}
 	names := zipEntryNames(t, packagePath)
@@ -166,6 +207,35 @@ func TestPackageEnvExportImportIncludesReferencedAgents(t *testing.T) {
 	}
 	if cfg.Active != (config.ActiveRef{Kind: config.ActiveKindProfile, Name: "default"}) {
 		t.Fatalf("import should not activate env, active = %#v", cfg.Active)
+	}
+}
+
+func TestPackageExportDefaultDoesNotExportEnv(t *testing.T) {
+	home := t.TempDir()
+	project := t.TempDir()
+	t.Setenv("HOME", home)
+	chdir(t, project)
+
+	writeTestAgent(t, project, "backend-coder", "codex")
+	if err := config.WriteEnvironment(&config.Environment{
+		Name: "coding",
+		RuntimeAgents: map[string]config.RuntimeAgent{
+			"codex": {
+				Primary: "backend-coder",
+			},
+		},
+		Targets: []string{"codex"},
+	}); err != nil {
+		t.Fatalf("write env: %v", err)
+	}
+
+	packagePath := filepath.Join(t.TempDir(), "coding.avm.zip")
+	out, err := executeCommand("export", "coding", "--output", packagePath)
+	if err == nil {
+		t.Fatalf("expected default export to reject env, got nil error and output %q", out)
+	}
+	if got, want := err.Error(), `package export target "coding" not found as agent`; got != want {
+		t.Fatalf("unexpected export error:\n got: %q\nwant: %q", got, want)
 	}
 }
 
@@ -210,6 +280,28 @@ func TestPackageImportDifferentContentConflict(t *testing.T) {
 	targetHome := t.TempDir()
 	t.Setenv("HOME", targetHome)
 	writeTestAgent(t, project, "backend-coder", "cline")
+
+	dryRunOut, err := executeCommand("install", "--dry-run", packagePath)
+	if err != nil {
+		t.Fatalf("conflict dry-run returned error: %v\n%s", err, dryRunOut)
+	}
+	for _, want := range []string{
+		"install plan for agent backend-coder: add 0, skip 0, conflict 1",
+		"conflicts:",
+		"agents/backend-coder.yaml",
+	} {
+		if !strings.Contains(dryRunOut, want) {
+			t.Fatalf("conflict dry-run output missing %q:\n%s", want, dryRunOut)
+		}
+	}
+	agent, err := config.ReadAgent("backend-coder", config.ScopeGlobal, project)
+	if err != nil {
+		t.Fatalf("read dry-run target agent: %v", err)
+	}
+	if agent.Runtime.Preferred != "cline" {
+		t.Fatalf("dry-run should not overwrite target agent, runtime = %q", agent.Runtime.Preferred)
+	}
+
 	out, err := executeCommand("import", packagePath)
 	if err == nil {
 		t.Fatalf("expected conflict, got nil error and output %q", out)

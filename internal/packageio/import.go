@@ -19,17 +19,28 @@ import (
 type ImportOptions struct {
 	PackagePath string
 	CWD         string
+	DryRun      bool
 }
 
 type ImportResult struct {
-	Manifest Manifest
-	Added    []ImportAction
-	Skipped  []ImportAction
+	Manifest  Manifest
+	Added     []ImportAction
+	Skipped   []ImportAction
+	Conflicts []ImportAction
 }
 
 type ImportAction struct {
 	PackagePath string
 	TargetPath  string
+}
+
+type InspectOptions struct {
+	PackagePath string
+}
+
+type InspectResult struct {
+	Manifest Manifest
+	Files    []string
 }
 
 type ConflictError struct {
@@ -49,7 +60,95 @@ func ImportPackage(opts ImportOptions) (*ImportResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	archive, err := readZip(opts.PackagePath)
+	archive, err := readPackageArchive(opts.PackagePath)
+	if err != nil {
+		return nil, err
+	}
+
+	plans := make([]importPlan, 0, len(archive.includeFiles))
+	seenTargets := make(map[string]importPlan, len(archive.includeFiles))
+	for _, packagePath := range archive.includeFiles {
+		data := archive.files[packagePath]
+		plan, err := importPlanForFile(packagePath, data, cwd)
+		if err != nil {
+			return nil, err
+		}
+		if previous, ok := seenTargets[plan.targetPath]; ok {
+			if !bytes.Equal(previous.data, plan.data) {
+				return nil, fmt.Errorf("package import conflict: %s and %s map to %s with different content", previous.packagePath, plan.packagePath, plan.targetPath)
+			}
+			continue
+		}
+		seenTargets[plan.targetPath] = plan
+		plans = append(plans, plan)
+	}
+	sort.Slice(plans, func(i, j int) bool {
+		return plans[i].packagePath < plans[j].packagePath
+	})
+
+	result := &ImportResult{Manifest: archive.manifest}
+	for _, plan := range plans {
+		existing, err := os.ReadFile(plan.targetPath)
+		if err == nil {
+			if bytes.Equal(existing, plan.data) {
+				result.Skipped = append(result.Skipped, ImportAction{PackagePath: plan.packagePath, TargetPath: plan.targetPath})
+				continue
+			}
+			result.Conflicts = append(result.Conflicts, ImportAction{PackagePath: plan.packagePath, TargetPath: plan.targetPath})
+			continue
+		}
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return nil, err
+		}
+		result.Added = append(result.Added, ImportAction{PackagePath: plan.packagePath, TargetPath: plan.targetPath})
+	}
+
+	if opts.DryRun {
+		return result, nil
+	}
+	if len(result.Conflicts) > 0 {
+		conflict := result.Conflicts[0]
+		return nil, &ConflictError{PackagePath: conflict.PackagePath, TargetPath: conflict.TargetPath}
+	}
+
+	for _, plan := range plans {
+		if containsAction(result.Skipped, plan.packagePath) {
+			continue
+		}
+		if containsAction(result.Conflicts, plan.packagePath) {
+			continue
+		}
+		if err := writeImportFile(plan.targetPath, plan.data); err != nil {
+			return nil, err
+		}
+	}
+	return result, nil
+}
+
+func InspectPackage(opts InspectOptions) (*InspectResult, error) {
+	if opts.PackagePath == "" {
+		return nil, fmt.Errorf("package inspect path is required")
+	}
+	archive, err := readPackageArchive(opts.PackagePath)
+	if err != nil {
+		return nil, err
+	}
+	files := append([]string(nil), archive.includeFiles...)
+	sort.Strings(files)
+	return &InspectResult{
+		Manifest: archive.manifest,
+		Files:    files,
+	}, nil
+}
+
+type packageArchive struct {
+	manifest     Manifest
+	files        map[string][]byte
+	includeFiles []string
+}
+
+func readPackageArchive(packagePath string) (*packageArchive, error) {
+	archive, err := readZip(packagePath)
 	if err != nil {
 		return nil, err
 	}
@@ -72,53 +171,11 @@ func ImportPackage(opts ImportOptions) (*ImportResult, error) {
 	if err := validateIncludeFiles(includeFiles, archive); err != nil {
 		return nil, err
 	}
-
-	plans := make([]importPlan, 0, len(includeFiles))
-	seenTargets := make(map[string]importPlan, len(includeFiles))
-	for _, packagePath := range includeFiles {
-		data := archive[packagePath]
-		plan, err := importPlanForFile(packagePath, data, cwd)
-		if err != nil {
-			return nil, err
-		}
-		if previous, ok := seenTargets[plan.targetPath]; ok {
-			if !bytes.Equal(previous.data, plan.data) {
-				return nil, fmt.Errorf("package import conflict: %s and %s map to %s with different content", previous.packagePath, plan.packagePath, plan.targetPath)
-			}
-			continue
-		}
-		seenTargets[plan.targetPath] = plan
-		plans = append(plans, plan)
-	}
-	sort.Slice(plans, func(i, j int) bool {
-		return plans[i].packagePath < plans[j].packagePath
-	})
-
-	result := &ImportResult{Manifest: manifest}
-	for _, plan := range plans {
-		existing, err := os.ReadFile(plan.targetPath)
-		if err == nil {
-			if bytes.Equal(existing, plan.data) {
-				result.Skipped = append(result.Skipped, ImportAction{PackagePath: plan.packagePath, TargetPath: plan.targetPath})
-				continue
-			}
-			return nil, &ConflictError{PackagePath: plan.packagePath, TargetPath: plan.targetPath}
-		}
-		if err != nil && !errors.Is(err, os.ErrNotExist) {
-			return nil, err
-		}
-	}
-
-	for _, plan := range plans {
-		if containsAction(result.Skipped, plan.packagePath) {
-			continue
-		}
-		if err := writeImportFile(plan.targetPath, plan.data); err != nil {
-			return nil, err
-		}
-		result.Added = append(result.Added, ImportAction{PackagePath: plan.packagePath, TargetPath: plan.targetPath})
-	}
-	return result, nil
+	return &packageArchive{
+		manifest:     manifest,
+		files:        archive,
+		includeFiles: append([]string(nil), includeFiles...),
+	}, nil
 }
 
 type importPlan struct {

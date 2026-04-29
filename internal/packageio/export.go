@@ -122,20 +122,13 @@ func (b *packageBuilder) addRoot(kind, name string) (string, error) {
 			}
 			return "agent", nil
 		}
-		if strings.TrimSpace(kind) != "" || !os.IsNotExist(err) {
+		if !os.IsNotExist(err) {
 			return "", err
 		}
-		env, err := config.ReadEnvironment(name)
-		if err != nil {
-			if os.IsNotExist(err) {
-				return "", fmt.Errorf("package export target %q not found as agent or env", name)
-			}
-			return "", err
+		if strings.TrimSpace(kind) == "" {
+			return "", fmt.Errorf("package export target %q not found as agent", name)
 		}
-		if err := b.addEnvironment(env); err != nil {
-			return "", err
-		}
-		return "env", nil
+		return "", err
 	case "env":
 		env, err := config.ReadEnvironment(name)
 		if err != nil {

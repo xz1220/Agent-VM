@@ -18,7 +18,7 @@ func newImportCommand() *cobra.Command {
 }
 
 func runImport(cmd *cobra.Command, args []string) error {
-	result, err := installPackageFromPath(args[0])
+	result, err := installPackageFromPath(args[0], false)
 	if err != nil {
 		return err
 	}
@@ -27,9 +27,11 @@ func runImport(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func installPackageFromPath(packagePath string) (*packageio.ImportResult, error) {
-	if err := ensureInitialized(); err != nil {
-		return nil, err
+func installPackageFromPath(packagePath string, dryRun bool) (*packageio.ImportResult, error) {
+	if !dryRun {
+		if err := ensureInitialized(); err != nil {
+			return nil, err
+		}
 	}
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -38,6 +40,7 @@ func installPackageFromPath(packagePath string) (*packageio.ImportResult, error)
 	result, err := packageio.ImportPackage(packageio.ImportOptions{
 		PackagePath: packagePath,
 		CWD:         cwd,
+		DryRun:      dryRun,
 	})
 	if err != nil {
 		return nil, err
