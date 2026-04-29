@@ -190,10 +190,10 @@ func TestStage5AcceptanceHardenedCLIFlow(t *testing.T) {
 	assertPathExists(t, filepath.Join(home, ".avm", "cache"))
 	assertPathExists(t, syncStatePath())
 
-	if _, err := executeCommand("init"); err == nil {
-		t.Fatal("second init without --force returned nil error")
-	} else if !strings.Contains(err.Error(), "avm home already initialized") {
-		t.Fatalf("unexpected repeated init error: %v", err)
+	if out, err := executeCommand("init"); err != nil {
+		t.Fatalf("second init returned error: %v", err)
+	} else {
+		assertContains(t, out, "avm home already initialized")
 	}
 
 	if out, err := executeCommand("init", "--force"); err != nil {
@@ -257,8 +257,12 @@ func TestStage5AcceptanceHardenedCLIFlow(t *testing.T) {
 	}
 	assertContains(t, importOut, "imported agent default: added")
 	assertPathExists(t, config.AgentPath("default"))
-	if _, err := os.Stat(config.GlobalConfigPath()); !os.IsNotExist(err) {
-		t.Fatalf("import should not activate package or write global config, stat err: %v", err)
+	cfg, err := config.ReadGlobalConfig()
+	if err != nil {
+		t.Fatalf("import should lazy initialize global config: %v", err)
+	}
+	if cfg.Active != (config.ActiveRef{Kind: config.ActiveKindProfile, Name: "default"}) {
+		t.Fatalf("import should not activate package, active = %#v", cfg.Active)
 	}
 }
 

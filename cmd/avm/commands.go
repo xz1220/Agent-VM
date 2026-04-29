@@ -9,11 +9,16 @@ import (
 func addCommands(root *cobra.Command) {
 	root.AddCommand(
 		newInitCommand(),
+		newCreateCommand(),
+		newPackageCommand(),
+		newSkillCommand(),
+		newRuntimeCommand(),
 		newAgentCommand(),
 		newEnvCommand(),
 		newMemoryCommand(),
 		newExportCommand(),
 		newImportCommand(),
+		newInstallCommand(),
 		newActivateCommand(),
 		newUseCommand(),
 		newStatusCommand(),

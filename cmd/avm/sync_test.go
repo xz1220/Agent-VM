@@ -37,12 +37,9 @@ func TestSyncCommandUsesCurrentConfigActive(t *testing.T) {
 	want := "active: profile:backend-coder\n" +
 		"sync: completed\n" +
 		"targets:\n" +
-		"  claude-code: skipped\n" +
-		"  cline: skipped\n" +
 		"  codex: synced\n" +
 		"warnings:\n" +
-		"  - claude-code: target has no resolved agent\n" +
-		"  - cline: target has no resolved agent\n"
+		"  none\n"
 	if out != want {
 		t.Fatalf("unexpected sync output:\n got: %q\nwant: %q", out, want)
 	}

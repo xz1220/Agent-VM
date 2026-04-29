@@ -69,9 +69,9 @@ func resolveProfileActivation(ref ActiveRef, cwd string) (*ResolvedActivation, e
 		return nil, err
 	}
 
-	runtime := agent.Runtime.Preferred
-	agents := map[string]AgentProfile{
-		runtime: *agent,
+	agents := make(map[string]AgentProfile, len(targets))
+	for _, runtime := range targets {
+		agents[runtime] = *agent
 	}
 
 	capabilities, capabilitySources, warnings := capabilitiesForAgents(agents)
@@ -162,17 +162,14 @@ func readAgentPreferProject(name, cwd string) (*AgentProfile, string, error) {
 }
 
 func targetsForProfile(agent *AgentProfile) ([]string, []string, error) {
-	cfg, err := ReadGlobalConfig()
-	if err == nil {
-		if len(cfg.Defaults.Targets) > 0 {
-			return cloneStringSlice(cfg.Defaults.Targets), []string{GlobalConfigPath()}, nil
-		}
-		return []string{agent.Runtime.Preferred}, []string{GlobalConfigPath()}, nil
+	if agent == nil {
+		return nil, nil, fieldError("", "agent", "profile is nil")
 	}
-	if !os.IsNotExist(err) {
-		return nil, nil, err
+	targets := uniqueStrings(append([]string{agent.Runtime.Preferred}, agent.Runtime.Fallback...))
+	if len(targets) == 0 {
+		return nil, nil, fieldError("", "runtime.preferred", "required")
 	}
-	return []string{agent.Runtime.Preferred}, nil, nil
+	return targets, nil, nil
 }
 
 func capabilitiesForAgents(agents map[string]AgentProfile) (map[string]ResolvedCapabilities, []string, []string) {

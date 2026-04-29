@@ -26,7 +26,27 @@ func TestRegisteredCommandHelp(t *testing.T) {
 		{
 			name: "root",
 			args: []string{"--help"},
-			want: []string{"activate", "agent", "deactivate", "env", "export", "import", "init", "memory", "shell", "status", "sync", "use"},
+			want: []string{"activate", "agent", "create", "deactivate", "env", "export", "import", "install", "init", "memory", "package", "runtime", "skill", "shell", "status", "sync", "use"},
+		},
+		{
+			name: "create",
+			args: []string{"create", "--help"},
+			want: []string{"create [package]", "--name", "--from", "--from-import", "--runtime", "--runtimes", "--yes", "--no-input"},
+		},
+		{
+			name: "package",
+			args: []string{"package", "--help"},
+			want: []string{"list", "show"},
+		},
+		{
+			name: "skill",
+			args: []string{"skill", "--help"},
+			want: []string{"list"},
+		},
+		{
+			name: "runtime",
+			args: []string{"runtime", "--help"},
+			want: []string{"list", "scan"},
 		},
 		{
 			name: "agent",
@@ -41,7 +61,7 @@ func TestRegisteredCommandHelp(t *testing.T) {
 		{
 			name: "env create",
 			args: []string{"env", "create", "--help"},
-			want: []string{"create <name>", "--codex", "--claude-code", "--cline", "--cursor"},
+			want: []string{"create <name>", "--codex", "--claude-code", "--opencode", "--cline", "--cursor"},
 		},
 		{
 			name: "memory import",
@@ -57,6 +77,11 @@ func TestRegisteredCommandHelp(t *testing.T) {
 			name: "import",
 			args: []string{"import", "--help"},
 			want: []string{"import <file.avm.zip>"},
+		},
+		{
+			name: "install",
+			args: []string{"install", "--help"},
+			want: []string{"install <file.avm.zip>"},
 		},
 		{
 			name: "activate",

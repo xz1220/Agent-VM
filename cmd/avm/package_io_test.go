@@ -93,8 +93,12 @@ func TestPackageAgentExportImportWithReferencedMetadata(t *testing.T) {
 			t.Fatalf("expected imported file %s: %v", path, err)
 		}
 	}
-	if _, err := os.Stat(config.GlobalConfigPath()); !os.IsNotExist(err) {
-		t.Fatalf("import should not activate package or write global config, stat err: %v", err)
+	cfg, err := config.ReadGlobalConfig()
+	if err != nil {
+		t.Fatalf("import should lazy initialize global config: %v", err)
+	}
+	if cfg.Active != (config.ActiveRef{Kind: config.ActiveKindProfile, Name: "default"}) {
+		t.Fatalf("import should not activate package, active = %#v", cfg.Active)
 	}
 
 	out, err = executeCommand("import", packagePath)
@@ -156,8 +160,38 @@ func TestPackageEnvExportImportIncludesReferencedAgents(t *testing.T) {
 	if _, err := config.ReadAgent("backend-reviewer", config.ScopeGlobal, project); err != nil {
 		t.Fatalf("read imported referenced agent: %v", err)
 	}
-	if _, err := os.Stat(config.GlobalConfigPath()); !os.IsNotExist(err) {
-		t.Fatalf("import should not activate env or write global config, stat err: %v", err)
+	cfg, err := config.ReadGlobalConfig()
+	if err != nil {
+		t.Fatalf("import should lazy initialize global config: %v", err)
+	}
+	if cfg.Active != (config.ActiveRef{Kind: config.ActiveKindProfile, Name: "default"}) {
+		t.Fatalf("import should not activate env, active = %#v", cfg.Active)
+	}
+}
+
+func TestInstallPackageAlias(t *testing.T) {
+	sourceHome := t.TempDir()
+	project := t.TempDir()
+	t.Setenv("HOME", sourceHome)
+	chdir(t, project)
+	writeTestAgent(t, project, "backend-coder", "codex")
+
+	packagePath := filepath.Join(t.TempDir(), "backend-coder.avm.zip")
+	if out, err := executeCommand("export", "backend-coder", "--output", packagePath); err != nil {
+		t.Fatalf("export returned error: %v\n%s", err, out)
+	}
+
+	targetHome := t.TempDir()
+	t.Setenv("HOME", targetHome)
+	out, err := executeCommand("install", packagePath)
+	if err != nil {
+		t.Fatalf("install returned error: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "installed agent backend-coder: added") {
+		t.Fatalf("unexpected install output: %q", out)
+	}
+	if _, err := config.ReadAgent("backend-coder", config.ScopeGlobal, project); err != nil {
+		t.Fatalf("read installed agent: %v", err)
 	}
 }
 

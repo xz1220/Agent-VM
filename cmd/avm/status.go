@@ -76,7 +76,7 @@ func printMissingConfigStatus(out io.Writer) {
 	fmt.Fprintln(out, "mapping status:")
 	fmt.Fprintln(out, "  none")
 	fmt.Fprintln(out, "warnings:")
-	fmt.Fprintln(out, "  - config not found; run avm init")
+	fmt.Fprintln(out, "  - avm home not initialized; run avm create backend-coder or avm init")
 }
 
 func printStatusWithoutSyncState(out io.Writer, active config.ActiveRef, targets []string, warnings []string) {

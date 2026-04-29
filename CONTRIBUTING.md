@@ -10,7 +10,7 @@ maintainer discussion has already narrowed the scope.
 
 Prerequisites:
 
-- Go 1.22+
+- Go 1.23+
 
 ```bash
 git clone https://github.com/xz1220/Agent-VM.git
@@ -33,7 +33,7 @@ make build
 ## Good First Contributions
 
 - Add or improve runtime mapping notes.
-- Add fixtures for real Codex, Claude Code, Cline, or Cursor configs.
+- Add fixtures for real Codex, Claude Code, OpenCode, Cline, or Cursor configs.
 - Add tests around CLI output and validation errors.
 - Improve docs for a real multi-agent workflow.
 - Report confusing behavior with exact commands and outputs.

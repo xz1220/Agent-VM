@@ -56,7 +56,7 @@ func TestInitCreatesBaseDirsAndInitialState(t *testing.T) {
 	}
 }
 
-func TestInitRepeatRequiresForceAndForcePreservesExtraFiles(t *testing.T) {
+func TestInitRepeatIsNoopAndForcePreservesExtraFiles(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
@@ -69,10 +69,12 @@ func TestInitRepeatRequiresForceAndForcePreservesExtraFiles(t *testing.T) {
 		t.Fatalf("write extra file: %v", err)
 	}
 
-	if _, err := executeCommand("init"); err == nil {
-		t.Fatal("expected repeat init to fail")
-	} else if !strings.Contains(err.Error(), "--force") {
-		t.Fatalf("repeat init error should mention --force, got %q", err.Error())
+	repeatOut, err := executeCommand("init")
+	if err != nil {
+		t.Fatalf("repeat init returned error: %v", err)
+	}
+	if repeatOut != "avm home already initialized\n" {
+		t.Fatalf("unexpected repeat init output: %q", repeatOut)
 	}
 	assertFileContains(t, extraPath, "keep me")
 

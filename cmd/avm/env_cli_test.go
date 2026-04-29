@@ -105,7 +105,7 @@ func TestEnvCreateLocalWritesProjectOverrideAndResolves(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read global env dir: %v", err)
 	}
-	if len(entries) != 1 || entries[0].Name() != "backend-dev.yaml" {
+	if len(entries) != 2 || entries[0].Name() != "backend-dev.yaml" || entries[1].Name() != "default.yaml" {
 		t.Fatalf("local env create should not add global env files, got %#v", entries)
 	}
 }

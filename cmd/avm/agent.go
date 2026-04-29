@@ -105,6 +105,9 @@ func newAgentShowCommand() *cobra.Command {
 }
 
 func runAgentCreate(cmd *cobra.Command, args []string) error {
+	if err := ensureInitialized(); err != nil {
+		return err
+	}
 	scope, err := scopeFromFlag(cmd)
 	if err != nil {
 		return err

@@ -33,12 +33,9 @@ func TestUseStatusDeactivateCommands(t *testing.T) {
 	wantUse := "active: profile:backend-coder\n" +
 		"sync: completed\n" +
 		"targets:\n" +
-		"  claude-code: skipped\n" +
-		"  cline: skipped\n" +
 		"  codex: synced\n" +
 		"warnings:\n" +
-		"  - claude-code: target has no resolved agent\n" +
-		"  - cline: target has no resolved agent\n"
+		"  none\n"
 	if useOut != wantUse {
 		t.Fatalf("unexpected use output:\n got: %q\nwant: %q", useOut, wantUse)
 	}
@@ -68,18 +65,12 @@ func TestUseStatusDeactivateCommands(t *testing.T) {
 	configPath := filepath.ToSlash(filepath.Join(codexHome, "config.toml"))
 	wantStatus := fmt.Sprintf("active: profile:backend-coder\n"+
 		"runtime status:\n"+
-		"  claude-code: skipped\n"+
-		"  cline: skipped\n"+
 		"  codex: synced (agent backend-coder)\n"+
 		"managed paths:\n"+
-		"  claude-code: none\n"+
-		"  cline: none\n"+
 		"  codex:\n"+
 		"    - %s owner=avm merge=whole-file\n"+
 		"    - %s owner=avm merge=whole-file\n"+
 		"mapping status:\n"+
-		"  claude-code: none\n"+
-		"  cline: none\n"+
 		"  codex:\n"+
 		"    - active -> profiles.avm-backend-coder: native\n"+
 		"    - agent.description -> agents.backend-coder.description: native\n"+
@@ -95,8 +86,7 @@ func TestUseStatusDeactivateCommands(t *testing.T) {
 		"    - capabilities.skills -> %s#developer_instructions: rendered_as_instructions (Codex has no native AVM skill registry mount in Phase 1.)\n"+
 		"    - project.AGENTS.md: ignored (Codex project instructions are user-owned; the Codex adapter does not overwrite AGENTS.md.)\n"+
 		"warnings:\n"+
-		"  - claude-code: target has no resolved agent\n"+
-		"  - cline: target has no resolved agent\n", rolePath, configPath, rolePath, rolePath, rolePath, rolePath, rolePath)
+		"  none\n", rolePath, configPath, rolePath, rolePath, rolePath, rolePath, rolePath)
 	if statusOut != wantStatus {
 		t.Fatalf("unexpected status output:\n got: %q\nwant: %q", statusOut, wantStatus)
 	}
@@ -108,12 +98,9 @@ func TestUseStatusDeactivateCommands(t *testing.T) {
 	wantDeactivate := "active: profile:default\n" +
 		"sync: completed\n" +
 		"targets:\n" +
-		"  claude-code: skipped\n" +
-		"  cline: skipped\n" +
 		"  codex: synced\n" +
 		"warnings:\n" +
-		"  - claude-code: target has no resolved agent\n" +
-		"  - cline: target has no resolved agent\n"
+		"  none\n"
 	if deactivateOut != wantDeactivate {
 		t.Fatalf("unexpected deactivate output:\n got: %q\nwant: %q", deactivateOut, wantDeactivate)
 	}
@@ -231,6 +218,7 @@ func TestActivatePrintsShellExportsForIsolatedRuntimeHomes(t *testing.T) {
 	writeFileForTest(t, filepath.Join(sourceCodexHome, "auth.json"), "{\"auth_mode\":\"source\"}\n")
 	sourceClaudeHome := filepath.Join(home, ".claude")
 	writeFileForTest(t, filepath.Join(sourceClaudeHome, ".credentials.json"), "{\"type\":\"oauth\"}\n")
+	writeFileForTest(t, filepath.Join(sourceClaudeHome, "config.json"), "{\"primaryApiKey\":\"source\"}\n")
 	chdir(t, project)
 
 	if _, err := executeCommand("init"); err != nil {
@@ -242,7 +230,10 @@ func TestActivatePrintsShellExportsForIsolatedRuntimeHomes(t *testing.T) {
 	if _, err := executeCommand("agent", "create", "claude-agent", "--runtime", "claude-code"); err != nil {
 		t.Fatalf("create claude agent: %v", err)
 	}
-	if _, err := executeCommand("env", "create", "dual-runtime", "--codex", "codex-agent", "--claude-code", "claude-agent"); err != nil {
+	if _, err := executeCommand("agent", "create", "opencode-agent", "--runtime", "opencode"); err != nil {
+		t.Fatalf("create opencode agent: %v", err)
+	}
+	if _, err := executeCommand("env", "create", "dual-runtime", "--codex", "codex-agent", "--claude-code", "claude-agent", "--opencode", "opencode-agent"); err != nil {
 		t.Fatalf("create env: %v", err)
 	}
 
@@ -253,6 +244,7 @@ func TestActivatePrintsShellExportsForIsolatedRuntimeHomes(t *testing.T) {
 	active := config.ActiveRef{Kind: config.ActiveKindEnv, Name: "dual-runtime"}
 	codexHome := config.RuntimeHomeDir(active, "codex")
 	claudeHome := config.RuntimeHomeDir(active, "claude-code")
+	opencodeHome := config.RuntimeHomeDir(active, "opencode")
 	for _, want := range []string{
 		"export AVM_HOME='" + filepath.Join(home, ".avm") + "'",
 		"export AVM_ACTIVE='env:dual-runtime'",
@@ -260,6 +252,8 @@ func TestActivatePrintsShellExportsForIsolatedRuntimeHomes(t *testing.T) {
 		"export CLAUDE_CONFIG_DIR='" + claudeHome + "'",
 		"export AVM_CLAUDE_MCP_CONFIG='" + filepath.Join(claudeHome, "mcp.json") + "'",
 		"export AVM_CLAUDE_AGENT='claude-agent'",
+		"export OPENCODE_CONFIG='" + filepath.Join(opencodeHome, "opencode.json") + "'",
+		"export OPENCODE_CONFIG_DIR='" + opencodeHome + "'",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("activate output missing %q:\n%s", want, out)
@@ -276,9 +270,15 @@ func TestActivatePrintsShellExportsForIsolatedRuntimeHomes(t *testing.T) {
 	if got := readFileForTest(t, filepath.Join(claudeHome, ".credentials.json")); got != "{\"type\":\"oauth\"}\n" {
 		t.Fatalf("claude credentials sidecar was not copied into runtime home: %q", got)
 	}
+	if got := readFileForTest(t, filepath.Join(claudeHome, "config.json")); got != "{\"primaryApiKey\":\"source\"}\n" {
+		t.Fatalf("claude config auth sidecar was not copied into runtime home: %q", got)
+	}
+	assertPathExistsForTest(t, filepath.Join(opencodeHome, "opencode.json"))
+	assertPathExistsForTest(t, filepath.Join(opencodeHome, "agents", "opencode-agent.md"))
 
 	writeFileForTest(t, filepath.Join(codexHome, "auth.json"), "{\"auth_mode\":\"isolated-login\"}\n")
 	writeFileForTest(t, filepath.Join(claudeHome, ".credentials.json"), "{\"type\":\"isolated-oauth\"}\n")
+	writeFileForTest(t, filepath.Join(claudeHome, "config.json"), "{\"primaryApiKey\":\"isolated\"}\n")
 	out, err = executeCommand("activate", "--kind", "env", "dual-runtime")
 	if err != nil {
 		t.Fatalf("second activate returned error: %v\n%s", err, out)
@@ -288,6 +288,9 @@ func TestActivatePrintsShellExportsForIsolatedRuntimeHomes(t *testing.T) {
 	}
 	if got := readFileForTest(t, filepath.Join(claudeHome, ".credentials.json")); got != "{\"type\":\"isolated-oauth\"}\n" {
 		t.Fatalf("claude credentials sidecar was not preserved across runtime home reset: %q", got)
+	}
+	if got := readFileForTest(t, filepath.Join(claudeHome, "config.json")); got != "{\"primaryApiKey\":\"isolated\"}\n" {
+		t.Fatalf("claude config auth sidecar was not preserved across runtime home reset: %q", got)
 	}
 }
 

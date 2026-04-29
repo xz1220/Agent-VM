@@ -43,9 +43,6 @@ func TestResolveActivationProfileActive(t *testing.T) {
 	if !containsString(resolved.SourceFiles, AgentPath("backend-coder")) {
 		t.Fatalf("source files missing agent path: %#v", resolved.SourceFiles)
 	}
-	if !containsString(resolved.SourceFiles, GlobalConfigPath()) {
-		t.Fatalf("source files missing global config path: %#v", resolved.SourceFiles)
-	}
 }
 
 func TestResolveActivationEnvActive(t *testing.T) {

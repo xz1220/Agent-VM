@@ -12,28 +12,35 @@ import (
 
 func newInitCommand() *cobra.Command {
 	var force bool
+	var yes bool
 	cmd := &cobra.Command{
 		Use:   "init",
 		Short: "Initialize an AVM home directory",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := initAVMHome(force); err != nil {
+			created, err := initAVMHome(force)
+			if err != nil {
 				return err
 			}
-			fmt.Fprintln(cmd.OutOrStdout(), "initialized avm home")
+			if created {
+				fmt.Fprintln(cmd.OutOrStdout(), "initialized avm home")
+			} else {
+				fmt.Fprintln(cmd.OutOrStdout(), "avm home already initialized")
+			}
 			return nil
 		},
 	}
 	cmd.Flags().BoolVar(&force, "force", false, "rebuild default AVM config, agent, and env")
+	cmd.Flags().BoolVar(&yes, "yes", false, "accept defaults and do not prompt")
 	return cmd
 }
 
-func initAVMHome(force bool) error {
+func initAVMHome(force bool) (bool, error) {
 	if !force {
 		if _, err := os.Stat(config.GlobalConfigPath()); err == nil {
-			return fmt.Errorf("avm home already initialized; use --force to rebuild defaults")
+			return false, nil
 		} else if !os.IsNotExist(err) {
-			return err
+			return false, err
 		}
 	}
 
@@ -56,23 +63,31 @@ func initAVMHome(force bool) error {
 	}
 	for _, dir := range dirs {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
-			return err
+			return false, err
 		}
 	}
 
 	if err := config.WriteGlobalConfig(defaultGlobalConfig()); err != nil {
-		return err
+		return false, err
 	}
 	if err := config.WriteAgent(defaultAgentProfile(), config.ScopeGlobal, ""); err != nil {
-		return err
+		return false, err
 	}
 	if err := config.WriteEnvironment(defaultEnvironment()); err != nil {
-		return err
+		return false, err
 	}
 	if err := state.SaveSyncState(syncStatePath(), state.NewSyncState(defaultGlobalConfig().Active)); err != nil {
-		return err
+		return false, err
 	}
-	return refreshInitImportReport()
+	if err := refreshInitImportReport(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func ensureInitialized() error {
+	_, err := initAVMHome(false)
+	return err
 }
 
 func cacheDir() string {
@@ -88,7 +103,7 @@ func defaultGlobalConfig() *config.GlobalConfig {
 		},
 		Defaults: config.DefaultsConfig{
 			SourceScope:      string(config.ScopeGlobal),
-			Targets:          []string{"claude-code", "codex", "cline"},
+			Targets:          []string{"claude-code", "codex", "opencode"},
 			ConflictStrategy: "prompt",
 		},
 		Settings: config.Settings{
@@ -122,9 +137,9 @@ func defaultEnvironment() *config.Environment {
 		RuntimeAgents: map[string]config.RuntimeAgent{
 			"claude-code": {Primary: "default"},
 			"codex":       {Primary: "default"},
-			"cline":       {Primary: "default"},
+			"opencode":    {Primary: "default"},
 		},
-		Targets: []string{"claude-code", "codex", "cline"},
+		Targets: []string{"claude-code", "codex", "opencode"},
 	}
 	env.ApplyDefaults()
 	return env

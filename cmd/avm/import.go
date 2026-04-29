@@ -18,18 +18,29 @@ func newImportCommand() *cobra.Command {
 }
 
 func runImport(cmd *cobra.Command, args []string) error {
-	cwd, err := os.Getwd()
-	if err != nil {
-		return err
-	}
-	result, err := packageio.ImportPackage(packageio.ImportOptions{
-		PackagePath: args[0],
-		CWD:         cwd,
-	})
+	result, err := installPackageFromPath(args[0])
 	if err != nil {
 		return err
 	}
 
 	fmt.Fprintf(cmd.OutOrStdout(), "imported %s %s: added %d, skipped %d\n", result.Manifest.Kind, result.Manifest.Name, len(result.Added), len(result.Skipped))
 	return nil
+}
+
+func installPackageFromPath(packagePath string) (*packageio.ImportResult, error) {
+	if err := ensureInitialized(); err != nil {
+		return nil, err
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return nil, err
+	}
+	result, err := packageio.ImportPackage(packageio.ImportOptions{
+		PackagePath: packagePath,
+		CWD:         cwd,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
 }
