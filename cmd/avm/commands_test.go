@@ -26,12 +26,12 @@ func TestRegisteredCommandHelp(t *testing.T) {
 		{
 			name: "root",
 			args: []string{"--help"},
-			want: []string{"activate", "agent", "create", "deactivate", "env", "export", "import", "install", "init", "memory", "package", "runtime", "skill", "shell", "status", "sync", "use"},
+			want: []string{"activate", "agent", "create", "deactivate", "env", "export", "import", "install", "init", "memory", "package", "skill", "shell", "status", "sync", "use"},
 		},
 		{
 			name: "create",
 			args: []string{"create", "--help"},
-			want: []string{"create [package]", "--name", "--from", "--from-import", "--runtime", "--runtimes", "--yes", "--no-input"},
+			want: []string{"create [package]", "--name", "--from", "--runtime", "--runtimes", "--yes", "--no-input"},
 		},
 		{
 			name: "package",
@@ -44,14 +44,9 @@ func TestRegisteredCommandHelp(t *testing.T) {
 			want: []string{"list"},
 		},
 		{
-			name: "runtime",
-			args: []string{"runtime", "--help"},
-			want: []string{"list", "scan"},
-		},
-		{
 			name: "agent",
 			args: []string{"agent", "--help"},
-			want: []string{"create", "list", "show"},
+			want: []string{"create", "clone", "edit", "list", "rename", "delete", "show"},
 		},
 		{
 			name: "agent create",

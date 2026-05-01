@@ -79,9 +79,6 @@ func initAVMHome(force bool) (bool, error) {
 	if err := state.SaveSyncState(syncStatePath(), state.NewSyncState(defaultGlobalConfig().Active)); err != nil {
 		return false, err
 	}
-	if err := refreshInitImportReport(); err != nil {
-		return false, err
-	}
 	return true, nil
 }
 

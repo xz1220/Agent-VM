@@ -13,7 +13,7 @@ func newRootCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:           "avm",
 		Short:         "Manage portable AI agent profiles across runtimes",
-		Long:          "Agent VM (AVM) manages portable AI agent profiles, capabilities, memory refs, and runtime render plans.",
+		Long:          "Agent VM (AVM) manages portable AI agent profiles and applies them across supported runtimes.",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		Version:       version.String(),

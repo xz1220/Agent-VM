@@ -24,7 +24,6 @@ type Adapter struct {
 	found      bool
 	version    string
 	configDir  string
-	imported   *adapter.ImportResult
 	memoryPlan *adapter.MemoryImportPlan
 	rendered   []*adapter.RenderPlan
 }
@@ -70,12 +69,6 @@ func WithConfigDir(configDir string) Option {
 	}
 }
 
-func WithImportResult(result *adapter.ImportResult) Option {
-	return func(a *Adapter) {
-		a.imported = cloneImportResult(result)
-	}
-}
-
 func WithMemoryImportPlan(plan *adapter.MemoryImportPlan) Option {
 	return func(a *Adapter) {
 		a.memoryPlan = cloneMemoryImportPlan(plan)
@@ -95,19 +88,6 @@ func (a *Adapter) Detect(ctx adapter.Context) adapter.Detection {
 		Version:   a.version,
 		ConfigDir: a.configDir,
 	}
-}
-
-func (a *Adapter) Import(ctx adapter.Context) (*adapter.ImportResult, error) {
-	_ = ctx
-
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	if a.imported != nil {
-		return cloneImportResult(a.imported), nil
-	}
-
-	return &adapter.ImportResult{Runtime: a.name}, nil
 }
 
 func (a *Adapter) Plan(ctx adapter.Context, input adapter.RenderInput) (*adapter.RenderPlan, error) {
@@ -395,21 +375,6 @@ func sortedMemoryIDs(memory []adapter.PortableMemory) []string {
 	}
 	sort.Strings(ids)
 	return ids
-}
-
-func cloneImportResult(result *adapter.ImportResult) *adapter.ImportResult {
-	if result == nil {
-		return nil
-	}
-
-	cloned := *result
-	cloned.Agents = append([]adapter.ImportedAgent(nil), result.Agents...)
-	for i := range cloned.Agents {
-		cloned.Agents[i].Instructions.References = append([]string(nil), result.Agents[i].Instructions.References...)
-		cloned.Agents[i].Mappings = append([]adapter.FieldMapping(nil), result.Agents[i].Mappings...)
-	}
-	cloned.Warnings = append([]string(nil), result.Warnings...)
-	return &cloned
 }
 
 func cloneMemoryImportPlan(plan *adapter.MemoryImportPlan) *adapter.MemoryImportPlan {

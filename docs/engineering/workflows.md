@@ -22,10 +22,9 @@ avm init [--force] [--template <name|url>]
 
 - 创建 `~/.avm/` 目录结构。
 - 创建 `config.yaml`。
-- 创建 `agents/default.yaml` 或从 runtime 导入 agents。
-- 始终创建 `agents/default.yaml` 和 `envs/default.yaml`；有导入对象时额外创建 `envs/imported-default.yaml`。
+- 创建 `agents/default.yaml`。
+- 创建 `envs/default.yaml`。
 - 初始化 `state/sync-state.json`。
-- 写入 `state/import-report.json`。
 - 不写入或覆盖 runtime 配置文件。
 
 **流程：**
@@ -35,45 +34,14 @@ func Init(opts InitOptions) error {
     ensureAvmDir(opts.Force)
     createBaseDirs()
 
-    imported := ImportResult{}
-    for _, adp := range adapter.All() {
-        detection := adp.Detect(ctx)
-        if !detection.Found {
-            continue
-        }
-        // Import is read-only: adapters may inspect runtime config but must not mutate it.
-        result, err := adp.Import(ctx)
-        if err != nil {
-            warn(adp.Name(), err)
-            continue
-        }
-        imported.Merge(result)
-    }
-
-    if imported.Empty() {
-        createDefaultAgent()
-        createDefaultEnv()
-    } else {
-        createDefaultEnv()
-        config.SaveImported(imported, ImportOptions{OnConflict: "rename"})
-        createImportedDefaultEnv(imported.Confirmed)
-        writeImportReport(imported)
-    }
+    createDefaultAgent()
+    createDefaultEnv()
 
     writeGlobalConfig()
     writeEmptySyncState()
     return nil
 }
 ```
-
-导入报告必须区分：
-
-- `confirmed`: 语义明确、已写入 `~/.avm` 的 Agent Profile、Capability、Environment。
-- `candidate`: 可能可迁移，但需要用户确认的对象，例如规则文件推断出的 agent。
-- `runtime_extensions`: 保留但不折叠进统一模型的 runtime 原生字段。
-- `ignored`: 明确不导入的字段和原因。
-
----
 
 ## 2. `avm agent create`
 

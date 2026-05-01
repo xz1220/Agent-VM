@@ -97,37 +97,6 @@ func (a *Adapter) Detect(ctx adapter.Context) adapter.Detection {
 	}
 }
 
-func (a *Adapter) Import(ctx adapter.Context) (*adapter.ImportResult, error) {
-	_ = ctx
-
-	agents := []adapter.ImportedAgent{}
-	warnings := []string{}
-	for _, dir := range []string{
-		filepath.Join(a.defaultProjectRoot(), claudeDirName, agentsDirName),
-		filepath.Join(a.claudeHome(), agentsDirName),
-	} {
-		imported, err := importAgents(dir)
-		if err != nil {
-			warnings = append(warnings, err.Error())
-			continue
-		}
-		agents = append(agents, imported...)
-	}
-
-	sort.SliceStable(agents, func(i, j int) bool {
-		if agents[i].SourcePath != agents[j].SourcePath {
-			return agents[i].SourcePath < agents[j].SourcePath
-		}
-		return agents[i].Name < agents[j].Name
-	})
-
-	return &adapter.ImportResult{
-		Runtime:  runtimeName,
-		Agents:   agents,
-		Warnings: warnings,
-	}, nil
-}
-
 func (a *Adapter) Plan(ctx adapter.Context, input adapter.RenderInput) (*adapter.RenderPlan, error) {
 	_ = ctx
 
@@ -960,100 +929,6 @@ func skillFrontmatterSpan(raw []byte) (int, int) {
 
 func safeRuntimeSkillName(name string) bool {
 	return name != "" && name != "." && name != ".." && !strings.Contains(name, "/") && !strings.Contains(name, "\\")
-}
-
-func importAgents(dir string) ([]adapter.ImportedAgent, error) {
-	info, err := os.Stat(dir)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	if !info.IsDir() {
-		return nil, fmt.Errorf("Claude Code agents path %s is not a directory", dir)
-	}
-
-	var agents []adapter.ImportedAgent
-	err = filepath.WalkDir(dir, func(path string, entry os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if entry.IsDir() || filepath.Ext(path) != ".md" {
-			return nil
-		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		agents = append(agents, parseImportedAgent(path, data))
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	return agents, nil
-}
-
-func parseImportedAgent(path string, data []byte) adapter.ImportedAgent {
-	sourcePath := filepath.ToSlash(path)
-	name := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
-	description := ""
-	body := string(data)
-
-	if fields, rest, ok := splitFrontmatter(body); ok {
-		if value := fields["name"]; value != "" {
-			name = value
-		}
-		description = fields["description"]
-		body = rest
-	}
-
-	return adapter.ImportedAgent{
-		Name:        name,
-		Description: description,
-		SourcePath:  sourcePath,
-		Instructions: adapter.Instructions{
-			Developer: strings.TrimSpace(body),
-		},
-		Mappings: []adapter.FieldMapping{
-			{SourcePath: sourcePath + "#frontmatter.name", TargetPath: "agent.name", Status: adapter.MappingNative},
-			{SourcePath: sourcePath + "#frontmatter.description", TargetPath: "agent.description", Status: adapter.MappingNative},
-			{SourcePath: sourcePath + "#body", TargetPath: "agent.instructions.developer", Status: adapter.MappingNative},
-		},
-	}
-}
-
-func splitFrontmatter(content string) (map[string]string, string, bool) {
-	if !strings.HasPrefix(content, "---\n") {
-		return nil, content, false
-	}
-	end := strings.Index(content[4:], "\n---")
-	if end < 0 {
-		return nil, content, false
-	}
-	frontmatter := content[4 : 4+end]
-	restStart := 4 + end + len("\n---")
-	if restStart < len(content) && content[restStart] == '\r' {
-		restStart++
-	}
-	if restStart < len(content) && content[restStart] == '\n' {
-		restStart++
-	}
-
-	fields := make(map[string]string)
-	for _, line := range strings.Split(frontmatter, "\n") {
-		key, value, ok := strings.Cut(line, ":")
-		if !ok {
-			continue
-		}
-		key = strings.TrimSpace(key)
-		value = strings.Trim(strings.TrimSpace(value), `"'`)
-		if key != "" {
-			fields[key] = value
-		}
-	}
-	return fields, content[restStart:], true
 }
 
 func writeYAMLString(builder *strings.Builder, key, value string) {

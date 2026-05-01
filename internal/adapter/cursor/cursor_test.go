@@ -44,19 +44,6 @@ func TestDetectUsesProjectCursorDir(t *testing.T) {
 	}
 }
 
-func TestImportReportsPartialPlaceholder(t *testing.T) {
-	result, err := cursor.New().Import(context.Background())
-	if err != nil {
-		t.Fatalf("import failed: %v", err)
-	}
-	if result.Runtime != "cursor" {
-		t.Fatalf("runtime = %q, want cursor", result.Runtime)
-	}
-	if !containsSubstring(result.Warnings, "partial") {
-		t.Fatalf("import warnings missing partial status: %#v", result.Warnings)
-	}
-}
-
 func TestPlanIsDeterministicAndPreservesEnvReferences(t *testing.T) {
 	ctx := context.Background()
 	a := cursor.New(cursor.WithProjectRoot("/repo"))

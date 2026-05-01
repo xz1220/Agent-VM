@@ -185,8 +185,8 @@ skills 这类目录资源仍可通过 active symlink 快速切换：
 5. **字段映射必须可解释。**
    每个 adapter 必须把关键字段标记为 `native`、`rendered_as_instructions`、`ignored` 或 `unsupported`，并让 `avm status` 可见；不得静默丢字段。
 
-6. **导入必须保守。**
-   runtime 原生字段无法可靠归一化时，必须保留到 `runtime_extensions.<runtime>` 或标记为 candidate，而不是猜测语义后写入统一字段。
+6. **Runtime 原生对象不自动提升。**
+   Claude Code subagents、OpenCode agent markdown 等 runtime-native 对象不与 AVM Agent 语义等价，不能通过自动导入猜测后写入统一字段。
 
 7. **Portable Memory 显式读写不变量。**
    AVM 可以引用现有 markdown/yaml memory，也可以做 import dry-run；但 `avm use` 不从 runtime native memory 静默 pull，也不向 runtime native memory 静默 push。任何 runtime memory 写回都必须通过显式命令、diff 和用户确认。
