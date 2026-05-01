@@ -81,17 +81,6 @@ func (a *Adapter) Detect(ctx adapter.Context) adapter.Detection {
 	}
 }
 
-func (a *Adapter) Import(ctx adapter.Context) (*adapter.ImportResult, error) {
-	_ = ctx
-
-	return &adapter.ImportResult{
-		Runtime: runtimeName,
-		Warnings: []string{
-			"codex import is read-only placeholder in Phase 1",
-		},
-	}, nil
-}
-
 func (a *Adapter) Plan(ctx adapter.Context, input adapter.RenderInput) (*adapter.RenderPlan, error) {
 	_ = ctx
 

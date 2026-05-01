@@ -37,35 +37,6 @@ func TestDetectUsesConfiguredClaudeHome(t *testing.T) {
 	}
 }
 
-func TestImportReadsClaudeAgentFiles(t *testing.T) {
-	projectRoot := t.TempDir()
-	agentsDir := filepath.Join(projectRoot, ".claude", "agents")
-	if err := os.MkdirAll(agentsDir, 0o700); err != nil {
-		t.Fatalf("mkdir agents: %v", err)
-	}
-	agentPath := filepath.Join(agentsDir, "reviewer.md")
-	content := "---\nname: reviewer\ndescription: Review changes\n---\n\nCheck correctness.\n"
-	if err := os.WriteFile(agentPath, []byte(content), 0o600); err != nil {
-		t.Fatalf("write agent: %v", err)
-	}
-
-	result, err := claude.New(claude.WithProjectRoot(projectRoot), claude.WithConfigDir(filepath.Join(projectRoot, "empty-home"))).Import(context.Background())
-	if err != nil {
-		t.Fatalf("import failed: %v", err)
-	}
-
-	if len(result.Agents) != 1 {
-		t.Fatalf("imported agents = %d, want 1: %#v", len(result.Agents), result.Agents)
-	}
-	got := result.Agents[0]
-	if got.Name != "reviewer" || got.Description != "Review changes" {
-		t.Fatalf("imported agent mismatch: %#v", got)
-	}
-	if got.Instructions.Developer != "Check correctness." {
-		t.Fatalf("developer instructions = %q", got.Instructions.Developer)
-	}
-}
-
 func TestPlanIsDeterministic(t *testing.T) {
 	ctx := context.Background()
 	a := claude.New()

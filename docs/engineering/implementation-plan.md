@@ -55,7 +55,7 @@ PRD 已明确：Phase 1 不做 `sync --watch`，不做 `workspace_isolation` 主
 | Stage 5 P1-P4 | `DONE` | `origin/feat/acceptance-harness`、`origin/feat/cli-hardening`、`origin/feat/env-hardening`、`origin/feat/package-io` | 各分支 `go test ./...`、`go vet ./...` |
 | Stage 5 P5 | `DONE` | Stage 5 branch integration、acceptance harness 更新、gap report 更新 | `go test ./...`、`go vet ./...`、`git diff --check` |
 | Stage 6 P0 | `DONE` | Acceptance polish 边界决策、prompts、Cursor 状态语义收敛 | `git diff --check` |
-| Stage 6 P1-P3 | `DONE` | `origin/feat/mapping-preview`、`origin/feat/init-import-report`、`origin/feat/docs-polish` | 各分支 `go test ./...`、`go vet ./...` 或 `git diff --check` |
+| Stage 6 P1-P3 | `DONE` | `origin/feat/mapping-preview`、`origin/feat/init-boundary`、`origin/feat/docs-polish` | 各分支 `go test ./...`、`go vet ./...` 或 `git diff --check` |
 | Stage 6 P4 | `DONE` | Stage 6 branch integration、README/acceptance 状态修正 | `go test ./...`、`go vet ./...`、CLI smoke |
 | Stage 7 P0 | `DONE` | OpenCode adapter、OpenCode activation env、README/docs 对齐 | `go test ./...`、`go vet ./...`、OpenCode first-run smoke |
 
@@ -69,7 +69,7 @@ Round 1 合并后的能力基线：
 
 ### 当前阶段：Post Stage 6 Follow-up
 
-状态：`S6-P4 DONE`。`agent show --runtime` mapping preview、`init` read-only runtime import report、README/examples/docs 对齐都已合并。Cursor Phase 1 状态语义已定：成功写入时保持 `synced`，partial 能力边界必须通过 warnings 和 mapping status 明确展示。
+状态：`S6-P4 DONE`。`agent show --runtime` mapping preview、`init` 边界收敛、README/examples/docs 对齐都已合并。Cursor Phase 1 状态语义已定：成功写入时保持 `synced`，partial 能力边界必须通过 warnings 和 mapping status 明确展示。
 
 当前 `avm use` 会重建 active、调用 sync、写 sync-state，并可通过 Codex / Claude Code / OpenCode / Cline / Cursor adapters 写入 AVM-managed config。Cursor 仍是 Phase 1 partial adapter，必须通过 warnings 和 mapping status 明确说明能力边界。
 
@@ -139,7 +139,7 @@ Stage 6 已执行 worktree 形态（归档，不再启动）：
 ```bash
 git fetch origin main
 git worktree add ../agent-vm-mapping-preview -b feat/mapping-preview origin/main
-git worktree add ../agent-vm-init-report -b feat/init-import-report origin/main
+git worktree add ../agent-vm-init-boundary -b feat/init-boundary origin/main
 git worktree add ../agent-vm-docs-polish -b feat/docs-polish origin/main
 ```
 
@@ -454,7 +454,7 @@ testdata/
 任务：
 
 1. `agent show --runtime` 使用 adapter `Plan` 输出 mapping preview，展示 native、rendered_as_instructions、ignored、unsupported。
-2. `avm init` 增加 read-only runtime scan report，写 `~/.avm/state/import-report.json`，不写 runtime 配置、不自动激活导入对象。
+2. `avm init` 只初始化 AVM 自有目录和默认对象，不读取 runtime-native agent/subagent 配置。
 3. README/examples/acceptance docs 与当前 CLI 对齐，明确 Cursor Phase 1 是 `synced` + warnings/mapping status，而不是独立 `partial` sync 状态。
 
 退出条件：
@@ -643,13 +643,13 @@ git worktree remove ../agent-vm-mapping-preview
 #### S6-P2 Init Import Report prompt
 
 ```text
-你是 Agent VM 的 S6-P2 Init Import Report Agent。请从最新 origin/main 创建独立 worktree 后开发、提交、推送，完成后删除自己的 worktree。
+你是 Agent VM 的 S6-P2 Init Boundary Agent。请从最新 origin/main 创建独立 worktree 后开发、提交、推送，完成后删除自己的 worktree。
 
 准备：
 cd /Users/danielxing/code/agent-vm
 git fetch origin main
-git worktree add ../agent-vm-init-report -b feat/init-import-report origin/main
-cd ../agent-vm-init-report
+git worktree add ../agent-vm-init-boundary -b feat/init-boundary origin/main
+cd ../agent-vm-init-boundary
 
 Owner：
 - cmd/avm/init*.go
@@ -665,23 +665,21 @@ Owner：
 - README / localized README / docs
 
 任务：
-- `avm init` 完成默认 config/agent/env/sync-state 后，read-only 扫描已注册 runtime adapters：调用 Detect 和 Import。
-- 写 `~/.avm/state/import-report.json`，结构稳定，至少包含 version、generated_at、runtimes[]、found/config_dir/version、agents candidates、warnings/errors。
-- 扫描只能读 runtime 文件，不得创建/修改/删除 Codex/Claude/OpenCode/Cline/Cursor runtime 配置；不得自动 `avm use`；不得把 candidate 直接写入 agents/envs。
-- adapter Import 返回错误时记录到 report，不让整个 init 失败，除非 report 文件本身写入失败。
-- `init --force` 也应刷新 report；已有用户额外 `~/.avm/**` 文件不得删除。
+- `avm init` 完成默认 config/agent/env/sync-state 后不扫描 runtime-native agent/subagent 配置。
+- 不写 `~/.avm/state/import-report.json`。
+- 不创建/修改/删除 Codex/Claude/OpenCode/Cline/Cursor runtime 配置；不得自动 `avm use`。
 
 验收：
 - go test ./...
 - go vet ./...
-- 临时 HOME/project/runtime fixture 测试覆盖：report 生成、runtime 文件 hash 不变、Import error 被记录、init --force 刷新 report。
+- 临时 HOME/project/runtime fixture 测试覆盖：runtime 文件 hash 不变、init --force 不删除额外 AVM 文件。
 - 提交前 git status --short --untracked-files=all 只能包含 Owner 范围文件。
 
 完成后：
-git push -u origin feat/init-import-report
+git push -u origin feat/init-boundary
 git status --short
 cd /Users/danielxing/code/agent-vm
-git worktree remove ../agent-vm-init-report
+git worktree remove ../agent-vm-init-boundary
 
 回复修改文件、测试结果、commit hash、远程分支，以及 init import/report 仍未覆盖的 runtime。
 ```
@@ -716,7 +714,7 @@ Owner：
 任务：
 - README/examples 对齐当前 CLI：init、agent create/list/show、env create/use、env create --local、memory import --dry-run、use/status/deactivate、sync、shell init、export/import。
 - 明确 Cursor Phase 1 语义：成功写入时 status 保持 `synced`；partial support 通过 warnings 和 mapping status 暴露。
-- 标注 runtime import-report 和 `agent show --runtime` 如果相关分支尚未合入，则属于 Stage 6 in-progress；不要把未合入能力写成已发布。
+- 标注 `agent show --runtime` 如果相关分支尚未合入，则属于 Stage 6 in-progress；不要把未合入能力写成已发布。
 - 删除或改写 Stage 5 之前的过时 not implemented 文案。
 - 保持中英文 README 信息一致，避免引入营销型内容。
 

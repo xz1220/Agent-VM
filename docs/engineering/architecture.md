@@ -27,12 +27,12 @@
 
 ## 架构不变量
 
-1. **Source of Truth 不变量**：`~/.avm` 保存 Agent Profile、Environment、Capability、Memory refs 和 render state；runtime 配置文件只作为导入来源或渲染输出。
-2. **只读初始化不变量**：`avm init` 只能扫描和导入，不得修改 runtime 配置文件；它最多写入 `~/.avm/**`。
+1. **Source of Truth 不变量**：`~/.avm` 保存 Agent Profile、Environment、Capability、Memory refs 和 render state；runtime 配置文件只作为渲染输出或显式 memory dry-run 的读取来源。
+2. **初始化不变量**：`avm init` 只初始化 AVM 自有目录和默认对象，不读取、创建或修改 runtime 配置文件。
 3. **受控激活不变量**：`avm use` 只能写 adapter 返回的 `ManagedPaths` 或 AVM 管理片段；写入前必须完成冲突检测和备份。
 4. **用户资产保护不变量**：手写 rules、instructions、project guidance 默认保留；adapter 不得为了适配方便整文件覆盖。
 5. **映射透明不变量**：adapter 对每个关键字段都必须输出 mapping status；`ignored` 和 `unsupported` 必须有 reason。
-6. **保守导入不变量**：无法确定语义的 runtime 字段进入 `runtime_extensions` 或 import candidate，不得被强行折叠进统一模型。
+6. **Runtime 语义边界不变量**：Claude Code subagents、OpenCode agent markdown 等 runtime-native 对象不得被自动提升为 AVM Agent。
 7. **Portable Memory 显式读写不变量**：`avm use` 只投影当前 profile 的 memory refs；runtime native memory 的 pull/push/import/export 必须通过显式命令、diff 和用户确认。
 
 ---
@@ -53,12 +53,12 @@
 │ └────┬─────┘ └─────┬─────┘ └────┬─────┘ └────┬─────┘         │
 │      │             │            │            │               │
 │ ┌────┴─────────────┴────────────┴────────────┴────┐          │
-│ │ state: hash、render plan、mapping status、import report │      │
+│ │ state: hash、render plan、mapping status                │      │
 │ └───────────────────────┬─────────────────────────┘          │
 ├─────────────────────────┼────────────────────────────────────┤
 │ Adapter 层 internal/adapter                                  │
 │ Claude Code | Codex | OpenCode | Cline | Cursor PoC | future  │
-│ Detect / Import / Plan / Render / ManagedPaths                │
+│ Detect / Plan / Render / ManagedPaths                         │
 ├──────────────────────────────────────────────────────────────┤
 │ 文件系统层                                                    │
 │ ~/.avm/**                       # AVM source of truth          │
@@ -115,17 +115,6 @@ avm use backend-coder
 
 ### 读取方向：Runtime → AVM
 
-`avm init` 和 `avm import` 可以读取已存在 runtime 配置：
-
-```
-adapter.Import()
-  -> imported AgentProfile candidates
-  -> imported MCP/skills/rules references
-  -> default profile or environment
-```
-
-导入流程必须只读：adapter 不得在 `Import()` 中写入 runtime 文件或修改用户手写配置。导入结果必须保守：无法确定语义的字段放入 `runtime_extensions.<runtime>` 或标记为 candidate，不能丢弃。
-
 `avm memory import --dry-run` 复用 adapter 的只读能力，但输出对象是 memory diff 而不是完整 profile 导入。它可以从 runtime native memory、rules、`AGENTS.md`、`CLAUDE.md` 等来源生成候选 portable memory；未确认前不得写入 `~/.avm/memory/` 或 runtime 文件。
 
 ---
@@ -172,11 +161,11 @@ type FieldMapping struct {
 | 模块 | 包路径 | 职责 | 不做什么 |
 |------|--------|------|---------|
 | config | `internal/config` | YAML 读写、schema 校验、profile/env 解析、路径解析 | 不写 runtime 文件 |
-| adapter | `internal/adapter` | runtime detect/import/plan/render、managed paths | 不做全局合并策略 |
+| adapter | `internal/adapter` | runtime detect/plan/render、managed paths | 不做全局合并策略 |
 | sync | `internal/sync` | active 重建、adapter 编排、冲突检测 | 不直接了解 runtime 格式 |
 | backup | `internal/backup` | 写入前备份 managed paths | 不决定备份策略 |
 | memory | `internal/memory` | portable memory metadata、import dry-run、standards 校验 | 不静默写 runtime native memory |
-| state | `internal/state` | hash、render status、last sync、import report | 不承载业务配置 |
+| state | `internal/state` | hash、render status、last sync | 不承载业务配置 |
 | runtime | `internal/runtime` | adapter 注册表，按名称查找 adapter 实例 | 不实现具体 adapter 逻辑 |
 | packageio | `internal/packageio` | 整包 export/import（ZIP 格式） | 不做 profile 解析 |
 | version | `internal/version` | 版本号管理 | 无外部依赖 |
@@ -263,7 +252,6 @@ backup     -> adapter, config
 type Adapter interface {
     Name() string
     Detect(ctx Context) Detection
-    Import(ctx Context) (*ImportResult, error)
     Plan(ctx Context, input RenderInput) (*RenderPlan, error)
     Render(ctx Context, plan *RenderPlan) (*RenderResult, error)
     ManagedPaths(ctx Context, plan *RenderPlan) []ManagedPath

@@ -108,7 +108,6 @@ $ export CODEX_HOME=~/.avm/runtimes/codex/review
 type Adapter interface {
     Name() string
     Detect(ctx Context) Detection
-    Import(ctx Context) (*ImportResult, error)
     Plan(ctx Context, input RenderInput) (*RenderPlan, error)
     Render(ctx Context, plan *RenderPlan) (*RenderResult, error)
     ManagedPaths(ctx Context, plan *RenderPlan) []ManagedPath

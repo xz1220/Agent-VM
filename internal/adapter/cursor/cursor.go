@@ -79,17 +79,6 @@ func (a *Adapter) Detect(ctx adapter.Context) adapter.Detection {
 	}
 }
 
-func (a *Adapter) Import(ctx adapter.Context) (*adapter.ImportResult, error) {
-	_ = ctx
-
-	return &adapter.ImportResult{
-		Runtime: runtimeName,
-		Warnings: append(partialWarnings(),
-			"cursor import is read-only placeholder in Phase 1 because Cursor has no stable local Agent Profile format",
-		),
-	}, nil
-}
-
 func (a *Adapter) Plan(ctx adapter.Context, input adapter.RenderInput) (*adapter.RenderPlan, error) {
 	_ = ctx
 

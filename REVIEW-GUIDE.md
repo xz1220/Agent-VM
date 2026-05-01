@@ -40,14 +40,13 @@ AVM 是一个 **多 AI-runtime 的 agent 配置管理器**。它把 agent profil
 type Adapter interface {
     Name() string                                                    // runtime 名称
     Detect(ctx Context) Detection                                    // 检测本机是否安装了该 runtime
-    Import(ctx Context) (*ImportResult, error)                       // 从 runtime 导入已有配置
     Plan(ctx Context, input RenderInput) (*RenderPlan, error)        // 根据 resolved config 生成渲染计划
     Render(ctx Context, plan *RenderPlan) (*RenderResult, error)     // 执行渲染，写入 runtime 配置文件
     ManagedPaths(ctx Context, plan *RenderPlan) []ManagedPath        // 声明该 adapter 管理哪些文件路径
 }
 ```
 
-**这是整个项目的核心**。所有 runtime 适配都围绕这 6 个方法展开。
+**这是整个项目的核心**。所有 runtime 适配都围绕这 5 个方法展开。
 
 ### 2. `adapter.MemoryImportCapable` — 可选能力接口
 

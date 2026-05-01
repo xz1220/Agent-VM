@@ -26,29 +26,26 @@ The user should not need to understand templates, symlinks, or runtime config fi
 
 ## Create Experience Loop
 
-The next friction point is not installation; it is turning an existing local setup into a focused profile.
+The next friction point is not installation; it is turning a package or existing
+AVM profile into a focused profile.
 
 Implemented in this iteration:
 
 - `avm create --from <profile>` copies an existing AVM profile, so users can start from `default` without editing YAML by hand.
-- `avm create --from-import <runtime>/<candidate>` promotes a runtime import-report candidate into an AVM profile.
-- Interactive `avm create` now shows package, profile, and import candidates as creation sources.
+- Interactive `avm create` now shows package and profile sources.
 - Interactive `avm create` uses a terminal wizard with arrow-key navigation and Space-based multi-select for runtimes, installed skills, and MCP servers from the local registry.
 - `avm skill list` gives users a standalone inventory with skill summaries before activation; inside an activated shell it defaults to the active profile's selected skills, with `--all` for the global registry.
-- `avm runtime list` shows detected runtimes and exact `avm create --from-import ...` commands for import candidates.
-- `avm runtime scan` refreshes detection and non-destructively bootstraps native runtime skills/MCP servers into the AVM global registry.
 
 Example:
 
 ```bash
 avm skill list
-avm runtime list
 avm create --from default --name api-coder
-avm create --from-import claude-code/reviewer --name reviewer-copy
 avm create backend-coder --runtimes codex,opencode
 ```
 
-This keeps package-first onboarding while adding a path for users who already have useful local configuration.
+This keeps package-first onboarding while avoiding ambiguous conversion from
+runtime-native subagents into AVM Agents.
 
 ## Runtime Priorities
 

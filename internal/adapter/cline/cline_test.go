@@ -307,31 +307,6 @@ func TestManagedPathsReturnsCopy(t *testing.T) {
 	}
 }
 
-func TestImportReadsAVMManagedRulesOnly(t *testing.T) {
-	projectRoot := t.TempDir()
-	rulesDir := filepath.Join(projectRoot, ".clinerules", "avm")
-	if err := os.MkdirAll(rulesDir, 0o700); err != nil {
-		t.Fatalf("mkdir rules: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(rulesDir, "backend-coder.md"), []byte("# AVM Agent: backend-coder\n"), 0o600); err != nil {
-		t.Fatalf("write avm rules: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(projectRoot, ".clinerules", "user.md"), []byte("user-owned\n"), 0o600); err != nil {
-		t.Fatalf("write user rules: %v", err)
-	}
-
-	result, err := cline.New(cline.WithProjectRoot(projectRoot)).Import(context.Background())
-	if err != nil {
-		t.Fatalf("import failed: %v", err)
-	}
-	if len(result.Agents) != 1 {
-		t.Fatalf("imported agents = %#v, want exactly one AVM-managed agent", result.Agents)
-	}
-	if result.Agents[0].Name != "backend-coder" {
-		t.Fatalf("imported agent name = %q", result.Agents[0].Name)
-	}
-}
-
 func TestFixturePlanShape(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join("..", "..", "..", "testdata", "adapter", "cline", "phase1_render_plan.json"))
 	if err != nil {

@@ -78,65 +78,6 @@ func (a *Adapter) Detect(ctx adapter.Context) adapter.Detection {
 	}
 }
 
-func (a *Adapter) Import(ctx adapter.Context) (*adapter.ImportResult, error) {
-	_ = ctx
-
-	result := &adapter.ImportResult{
-		Runtime: runtimeName,
-		Warnings: []string{
-			"cline import reads only AVM-managed .clinerules/avm files in Phase 1",
-		},
-	}
-	if a.projectRoot == "" {
-		return result, nil
-	}
-
-	rulesDir := filepath.Join(a.projectRoot, ".clinerules", "avm")
-	entries, err := os.ReadDir(rulesDir)
-	if errors.Is(err, os.ErrNotExist) {
-		return result, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		ext := strings.ToLower(filepath.Ext(entry.Name()))
-		if ext != ".md" && ext != ".txt" {
-			continue
-		}
-		path := filepath.Join(rulesDir, entry.Name())
-		content, err := os.ReadFile(path)
-		if err != nil {
-			return nil, err
-		}
-		name := strings.TrimSuffix(entry.Name(), filepath.Ext(entry.Name()))
-		result.Agents = append(result.Agents, adapter.ImportedAgent{
-			Name:       name,
-			SourcePath: filepath.ToSlash(path),
-			Instructions: adapter.Instructions{
-				Developer: string(content),
-			},
-			Mappings: []adapter.FieldMapping{
-				{
-					SourcePath: "project.clinerules.avm." + name,
-					TargetPath: filepath.ToSlash(path),
-					Status:     adapter.MappingRenderedAsInstructions,
-					Reason:     "Cline rules are imported as instruction text because Cline has no stable local Agent Profile file in Phase 1.",
-				},
-			},
-		})
-	}
-
-	sort.SliceStable(result.Agents, func(i, j int) bool {
-		return result.Agents[i].Name < result.Agents[j].Name
-	})
-	return result, nil
-}
-
 func (a *Adapter) Plan(ctx adapter.Context, input adapter.RenderInput) (*adapter.RenderPlan, error) {
 	_ = ctx
 

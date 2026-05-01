@@ -263,28 +263,6 @@ func LoadHooks(names []string) ([]HookConfig, error)
 
 ---
 
-## Import 写入策略
-
-adapter.Import 产生候选对象后，config 模块负责落盘：
-
-```go
-func SaveImported(result *adapter.ImportResult, opts ImportOptions) error
-```
-
-冲突策略：
-
-| 情况 | 默认行为 |
-|------|----------|
-| 同名 agent 内容相同 | skip |
-| 同名 agent 内容不同 | rename 为 `<name>-imported` 并提示 |
-| 同名 MCP 内容相同 | skip |
-| 同名 MCP 内容不同 | fail，要求用户指定 overwrite/rename |
-| 无法识别字段 | 存入 `runtime_extensions.<runtime>` |
-
-`SaveImported` 只落盘 `result.Confirmed` 中的对象；`Candidates`、`Ignored` 和 `RuntimeExtensions` 必须写入 import report，并在 CLI 输出中展示，不能静默丢弃。
-
----
-
 ## 错误格式
 
 配置错误必须包含文件路径和字段路径：
