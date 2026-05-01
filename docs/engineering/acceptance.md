@@ -1,6 +1,6 @@
 # Agent VM — 验收标准
 
-> 最后更新：2026-04-29（v10 — Create wizard and runtime discovery UX）
+> 最后更新：2026-05-01（v11 — Runtime import removed）
 
 本文档定义 Phase 1 MVP 的验收标准，并标注当前 `main` 的可执行基线。验收重点是 Agent Profile、能力引用、多 runtime Environment 映射、Claude Code/Codex/OpenCode/Cline/Cursor adapter、render mapping 和数据安全。
 
@@ -8,9 +8,9 @@
 
 ## 验收原则
 
-1. 当前已合入的 Phase 1 命令可用：`init`、`create`、`skill list`、`runtime list/scan`、`agent create/list/show`、`agent show --runtime`、`env create`、`env create --local`、`memory import --dry-run`、`use/status/deactivate`、`sync`、`shell init`、`export/import`。
+1. 当前已合入的 Phase 1 命令可用：`init`、`create`、`skill list`、`agent create/list/show`、`agent show --runtime`、`env create`、`env create --local`、`memory import --dry-run`、`use/status/deactivate`、`sync`、`shell init`、`export/import`。
 2. `~/.avm` 是 Agent Profile 的 source of truth。
-3. `avm init` 只写 `~/.avm/**` 默认配置和 state，包括 read-only runtime scan 的 `state/import-report.json`；不得修改 runtime 配置。
+3. `avm init` 只写 `~/.avm/**` 默认配置和 state；不得读取或修改 runtime 配置。
 4. 不默认覆盖用户 instruction 文件。
 5. adapter 不静默丢字段，必须记录 mapping status。
 6. 写 runtime 文件前有冲突检测和备份。
@@ -47,21 +47,7 @@ avm init
 - 不删除已有 `~/.avm/`。
 - 退出码 1。
 
-### 1.3 Runtime import-report
-
-前置：
-
-- 存在 `~/.codex/config.toml`，包含 profile/MCP。
-- 存在 Claude Code `.claude/agents/reviewer.md`。
-
-预期：
-
-- 写入 `state/import-report.json`，包含 version、generated_at、runtimes[]、found/config_dir/version、agent_candidates、warnings/errors。
-- 不创建 imported agent/env。
-- 不自动激活 imported candidates。
-- `~/.codex/config.toml` 和 `.claude/agents/reviewer.md` 内容 hash 不变。
-
-### 1.4 只读初始化
+### 1.3 只读初始化
 
 前置：
 
@@ -77,7 +63,6 @@ avm init
 
 - 只创建或修改 `~/.avm/**`。
 - 不创建、不修改、不删除任何 runtime 配置文件。
-- 写入 `state/import-report.json`，并按 runtime 区分 found、agent candidates、warnings 和 errors。
 
 ---
 

@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -14,7 +13,6 @@ import (
 
 	"github.com/charmbracelet/huh"
 	"github.com/spf13/cobra"
-	"github.com/xz1220/agent-vm/internal/adapter"
 	"github.com/xz1220/agent-vm/internal/config"
 )
 
@@ -32,19 +30,18 @@ type builtinPackage struct {
 }
 
 type createOptions struct {
-	Package    string
-	From       string
-	FromImport string
-	Name       string
-	Runtime    string
-	Runtimes   []string
-	Model      string
-	Reasoning  string
-	Skills     []string
-	MCPs       []string
-	Scope      config.Scope
-	Yes        bool
-	NoInput    bool
+	Package   string
+	From      string
+	Name      string
+	Runtime   string
+	Runtimes  []string
+	Model     string
+	Reasoning string
+	Skills    []string
+	MCPs      []string
+	Scope     config.Scope
+	Yes       bool
+	NoInput   bool
 }
 
 func newCreateCommand() *cobra.Command {
@@ -53,7 +50,7 @@ func newCreateCommand() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "create [package]",
-		Short: "Create an AVM agent profile from a package",
+		Short: "Create an AVM agent profile",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) > 0 {
@@ -69,7 +66,6 @@ func newCreateCommand() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&opts.Name, "name", "", "agent profile name to create")
 	cmd.Flags().StringVar(&opts.From, "from", "", "copy an existing AVM agent profile")
-	cmd.Flags().StringVar(&opts.FromImport, "from-import", "", "create from runtime import candidate, e.g. claude-code/reviewer")
 	cmd.Flags().StringVar(&opts.Runtime, "runtime", "", "preferred runtime for the created profile")
 	cmd.Flags().StringSliceVar(&opts.Runtimes, "runtimes", nil, "runtimes to support, first one is preferred")
 	cmd.Flags().StringVar(&opts.Model, "model", "", "model override")
@@ -138,7 +134,6 @@ type createSourceKind string
 const (
 	createSourcePackage createSourceKind = "package"
 	createSourceProfile createSourceKind = "profile"
-	createSourceImport  createSourceKind = "import"
 )
 
 type createSource struct {
@@ -149,7 +144,6 @@ type createSource struct {
 	Runtime     string
 	Package     builtinPackage
 	Agent       *config.AgentProfile
-	Imported    adapter.ImportedAgent
 }
 
 func (s createSource) Summary() string {
@@ -161,8 +155,6 @@ func (s createSource) Summary() string {
 			return fmt.Sprintf("%s profile %s", s.Scope, s.Name)
 		}
 		return "profile " + s.Name
-	case createSourceImport:
-		return fmt.Sprintf("%s import candidate %s", s.Runtime, s.Name)
 	default:
 		return s.Name
 	}
@@ -188,17 +180,11 @@ type resolvedCreateValues struct {
 }
 
 func resolveCreateSource(cmd *cobra.Command, reader *bufio.Reader, out io.Writer, cwd, pkgName string, opts createOptions, useTUI bool) (createSource, error) {
-	if opts.From != "" && opts.FromImport != "" {
-		return createSource{}, fmt.Errorf("--from and --from-import cannot be used together")
-	}
-	if pkgName != "" && (opts.From != "" || opts.FromImport != "") {
-		return createSource{}, fmt.Errorf("create package arg cannot be combined with --from or --from-import")
+	if pkgName != "" && opts.From != "" {
+		return createSource{}, fmt.Errorf("create package arg cannot be combined with --from")
 	}
 	if opts.From != "" {
 		return createSourceFromProfile(opts.From, cwd)
-	}
-	if opts.FromImport != "" {
-		return createSourceFromImport(opts.FromImport)
 	}
 	if pkgName != "" {
 		return createSourceFromPackage(pkgName)
@@ -207,7 +193,7 @@ func resolveCreateSource(cmd *cobra.Command, reader *bufio.Reader, out io.Writer
 		return createSourceFromPackage("backend-coder")
 	}
 	if opts.NoInput {
-		return createSource{}, fmt.Errorf("create requires a package, --from, --from-import, --yes, or interactive input")
+		return createSource{}, fmt.Errorf("create requires a package, --from, --yes, or interactive input")
 	}
 	if useTUI {
 		return promptCreateSourceTUI(cmd, cwd)
@@ -250,40 +236,6 @@ func createSourceFromProfile(name, cwd string) (createSource, error) {
 		}
 	}
 	return createSource{}, fmt.Errorf("profile %q not found in project or global agents", name)
-}
-
-func createSourceFromImport(ref string) (createSource, error) {
-	sources, err := listImportCandidateSources()
-	if err != nil {
-		return createSource{}, err
-	}
-	runtime, name := splitImportRef(ref)
-	var matches []createSource
-	for _, source := range sources {
-		if runtime != "" && source.Runtime != runtime {
-			continue
-		}
-		if source.Name == name {
-			matches = append(matches, source)
-		}
-	}
-	if len(matches) == 1 {
-		return matches[0], nil
-	}
-	if len(matches) > 1 {
-		return createSource{}, fmt.Errorf("import candidate %q is ambiguous; use runtime/name", ref)
-	}
-	return createSource{}, fmt.Errorf("import candidate %q not found; run avm runtime scan to rescan runtimes", ref)
-}
-
-func splitImportRef(ref string) (string, string) {
-	ref = strings.TrimSpace(ref)
-	for _, sep := range []string{"/", ":"} {
-		if runtime, name, ok := strings.Cut(ref, sep); ok {
-			return strings.TrimSpace(runtime), strings.TrimSpace(name)
-		}
-	}
-	return "", ref
 }
 
 func promptCreateSource(reader *bufio.Reader, out io.Writer, cwd string) (createSource, error) {
@@ -351,11 +303,6 @@ func listCreateSources(cwd string) ([]createSource, error) {
 		return nil, err
 	}
 	sources = append(sources, profiles...)
-	imports, err := listImportCandidateSources()
-	if err != nil {
-		return nil, err
-	}
-	sources = append(sources, imports...)
 	return sources, nil
 }
 
@@ -382,56 +329,6 @@ func listProfileSources(cwd string) ([]createSource, error) {
 		}
 	}
 	return sources, nil
-}
-
-func listImportCandidateSources() ([]createSource, error) {
-	if _, err := os.Stat(initImportReportPath()); os.IsNotExist(err) {
-		if refreshErr := refreshInitImportReport(); refreshErr != nil {
-			return nil, refreshErr
-		}
-	}
-	report, err := readCreateImportReport()
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-
-	var sources []createSource
-	for _, runtimeReport := range report.Runtimes {
-		for _, candidate := range runtimeReport.AgentCandidates {
-			if strings.TrimSpace(candidate.Name) == "" {
-				continue
-			}
-			sources = append(sources, createSource{
-				Kind:        createSourceImport,
-				Name:        candidate.Name,
-				Description: candidate.Description,
-				Runtime:     runtimeReport.Runtime,
-				Imported:    candidate,
-			})
-		}
-	}
-	sort.SliceStable(sources, func(i, j int) bool {
-		if sources[i].Runtime != sources[j].Runtime {
-			return sources[i].Runtime < sources[j].Runtime
-		}
-		return sources[i].Name < sources[j].Name
-	})
-	return sources, nil
-}
-
-func readCreateImportReport() (*initImportReport, error) {
-	raw, err := os.ReadFile(initImportReportPath())
-	if err != nil {
-		return nil, err
-	}
-	var report initImportReport
-	if err := json.Unmarshal(raw, &report); err != nil {
-		return nil, fmt.Errorf("read import report: %w", err)
-	}
-	return &report, nil
 }
 
 func resolveCreateValues(cmd *cobra.Command, reader *bufio.Reader, out io.Writer, cwd string, source createSource, opts createOptions, useTUI bool) (resolvedCreateValues, error) {
@@ -567,12 +464,6 @@ func defaultCreateValues(source createSource, opts createOptions, cwd string) re
 		values.Reasoning = firstNonEmptyString(opts.Reasoning, agent.ModelRun.ReasoningEffort, "medium")
 		values.Skills = append([]string(nil), agent.Capabilities.Skills...)
 		values.MCPs = append([]string(nil), agent.Capabilities.MCPs...)
-	case createSourceImport:
-		values.Name = firstNonEmptyString(opts.Name, suggestAvailableAgentName(source.Name, values.Scope, cwd))
-		values.Runtime = firstNonEmptyString(opts.Runtime, source.Runtime, "codex")
-		values.Runtimes = normalizeCreateRuntimeList([]string{values.Runtime})
-		values.Model = opts.Model
-		values.Reasoning = firstNonEmptyString(opts.Reasoning, "medium")
 	case createSourcePackage:
 		fallthrough
 	default:
@@ -595,8 +486,6 @@ func agentFromCreateSource(source createSource, values resolvedCreateValues) *co
 	switch source.Kind {
 	case createSourceProfile:
 		return agentFromExistingProfile(source.Agent, values)
-	case createSourceImport:
-		return agentFromImportedCandidate(source, values)
 	case createSourcePackage:
 		fallthrough
 	default:
@@ -642,32 +531,6 @@ func agentFromExistingProfile(source *config.AgentProfile, values resolvedCreate
 	agent.Capabilities.Skills = append([]string(nil), values.Skills...)
 	agent.Capabilities.MCPs = append([]string(nil), values.MCPs...)
 	return agent
-}
-
-func agentFromImportedCandidate(source createSource, values resolvedCreateValues) *config.AgentProfile {
-	return &config.AgentProfile{
-		Name:        values.Name,
-		Description: source.Imported.Description,
-		SourceScope: string(values.Scope),
-		Runtime:     runtimePreferencesFromValues(values),
-		Identity: config.AgentIdentity{
-			DisplayName: values.Name,
-			Role:        source.Runtime + "-import",
-		},
-		Instructions: config.Instructions{
-			System:     source.Imported.Instructions.System,
-			Developer:  source.Imported.Instructions.Developer,
-			References: append([]string(nil), source.Imported.Instructions.References...),
-		},
-		ModelRun: config.ModelRun{
-			Model:           values.Model,
-			ReasoningEffort: values.Reasoning,
-		},
-		Capabilities: config.CapabilityRefs{
-			Skills: values.Skills,
-			MCPs:   values.MCPs,
-		},
-	}
 }
 
 func cloneAgentProfile(source *config.AgentProfile) *config.AgentProfile {

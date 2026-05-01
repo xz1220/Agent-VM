@@ -176,11 +176,6 @@ func (previewPlanErrorAdapter) Detect(ctx avmadapter.Context) avmadapter.Detecti
 	return avmadapter.Detection{Runtime: "codex", Found: true}
 }
 
-func (previewPlanErrorAdapter) Import(ctx avmadapter.Context) (*avmadapter.ImportResult, error) {
-	_ = ctx
-	return nil, nil
-}
-
 func (previewPlanErrorAdapter) Plan(ctx avmadapter.Context, input avmadapter.RenderInput) (*avmadapter.RenderPlan, error) {
 	_, _ = ctx, input
 	return nil, errors.New("boom")

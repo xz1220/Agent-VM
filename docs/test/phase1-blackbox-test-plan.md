@@ -314,7 +314,6 @@ diff -u "$TEST_ROOT/logs/hash-before-init.txt" "$TEST_ROOT/logs/hash-after-init.
 
 - `diff` 无变化（用户已有文件 hash 不变）。
 - 创建 `$HOME/.avm/config.yaml`。
-- 创建 `$HOME/.avm/state/import-report.json`。
 - 不创建或修改 runtime managed files。
 
 验证：
@@ -323,7 +322,6 @@ diff -u "$TEST_ROOT/logs/hash-before-init.txt" "$TEST_ROOT/logs/hash-after-init.
 assert_eq "BBT-002 hash unchanged" "" \
   "$(diff -u "$TEST_ROOT/logs/hash-before-init.txt" "$TEST_ROOT/logs/hash-after-init.txt")"
 assert_file_exists "BBT-002 config.yaml" "$HOME/.avm/config.yaml"
-assert_file_exists "BBT-002 import-report.json" "$HOME/.avm/state/import-report.json"
 ```
 
 ### BBT-003 创建 Agent 和 Environment
@@ -874,5 +872,4 @@ Stats: X PASS, Y FAIL, Z SKIP
 - `config.toml`
 - `.mcp.json`
 - `sync-state.json`
-- `import-report.json`
 ```

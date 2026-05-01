@@ -43,7 +43,6 @@
 ├── state/
 │   ├── sync-state.json
 │   ├── current-active
-│   ├── import-report.json
 │   └── memory-import-report.json
 ├── backup/
 └── cache/
@@ -54,10 +53,10 @@
 | 路径 | 职责 | 生命周期 |
 |------|------|----------|
 | `config.yaml` | 全局设置、active profile/env、默认 targets | `avm init` 创建，`avm use` 更新 |
-| `agents/` | Agent Profile source of truth | `avm agent create/import` 写入 |
-| `envs/` | 多 runtime 激活映射 | `avm env create/import` 写入 |
-| `registry/skills/` | skill 原始目录池 | init/import/install 写入 |
-| `registry/mcps/` | MCP 统一定义 | init/import/install 写入 |
+| `agents/` | Agent Profile source of truth | `avm agent create`、package install 写入 |
+| `envs/` | 多 runtime 激活映射 | `avm env create`、package install 写入 |
+| `registry/skills/` | skill 原始目录池 | package install 写入 |
+| `registry/mcps/` | MCP 统一定义 | package install 写入 |
 | `registry/commands/` | 命令 capability | Phase 1 建模，按 runtime 支持渲染 |
 | `registry/hooks/` | hook capability | Phase 1 建模，按 runtime 支持渲染 |
 | `memory/` | portable memory 文件和元数据 | 用户、import 或 memory 命令写入 |

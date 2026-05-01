@@ -11,7 +11,6 @@ type Context = context.Context
 type Adapter interface {
 	Name() string
 	Detect(ctx Context) Detection
-	Import(ctx Context) (*ImportResult, error)
 	Plan(ctx Context, input RenderInput) (*RenderPlan, error)
 	Render(ctx Context, plan *RenderPlan) (*RenderResult, error)
 	ManagedPaths(ctx Context, plan *RenderPlan) []ManagedPath
@@ -31,22 +30,6 @@ type Detection struct {
 	Version   string   `json:"version,omitempty"`
 	ConfigDir string   `json:"config_dir,omitempty"`
 	Warnings  []string `json:"warnings,omitempty"`
-}
-
-// ImportResult is a conservative, read-only import view of runtime config.
-type ImportResult struct {
-	Runtime  string          `json:"runtime"`
-	Agents   []ImportedAgent `json:"agents,omitempty"`
-	Warnings []string        `json:"warnings,omitempty"`
-}
-
-// ImportedAgent is a candidate AVM agent inferred from a runtime config.
-type ImportedAgent struct {
-	Name         string         `json:"name"`
-	Description  string         `json:"description,omitempty"`
-	SourcePath   string         `json:"source_path,omitempty"`
-	Instructions Instructions   `json:"instructions,omitempty"`
-	Mappings     []FieldMapping `json:"mappings,omitempty"`
 }
 
 // RenderInput is the runtime-independent input an adapter receives after the

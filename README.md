@@ -34,9 +34,8 @@ users a small set of durable objects:
   Claude Code, OpenCode, Cline, or Cursor.
 
 Everything else is supporting machinery. Skills are part of an Agent profile.
-Runtime discovery is a source option inside Agent creation, not a standalone user
-workflow. Syncing to runtime files is an implementation detail behind `avm use`
-and the managed activation model.
+Runtime detection and syncing are implementation details behind `avm use` and
+the managed activation model.
 
 ## Daily Path
 
@@ -55,7 +54,7 @@ The intended path is simple:
 5. Start your runtime.
 
 ```text
-Package / existing Agent / local runtime config
+Package / existing Agent
   -> create Agent
     -> use Agent or Environment
       -> runtime-specific managed config
@@ -102,7 +101,6 @@ Current preview:
 avm create
 avm create backend-coder
 avm create --from default --name api-coder
-avm create --from-import claude-code/reviewer --name reviewer-copy
 
 avm agent create backend-coder --runtime codex --skills git,test
 avm agent list
@@ -128,11 +126,6 @@ Agent from one of these sources:
 - a blank/default Agent
 - a built-in or installed Package
 - an existing Agent
-- local runtime configuration discovered from tools already installed on the
-  machine
-
-The last item replaces the old mental model of a standalone "runtime discovery"
-module.
 
 ### 3. Environment Configuration
 
@@ -241,7 +234,6 @@ surface is not finished.
 | Environment | `create` | missing list/show/edit/delete/rename/clone |
 | Install lifecycle | installer, `init`, `shell init` | missing first-class doctor/uninstall commands |
 | Package | list/show/inspect/export/install | install/export naming still split across commands |
-| Runtime discovery | `runtime scan/list`, `--from-import` | should be folded into Agent creation UX |
 | Skills | `skill list` | should be surfaced primarily inside Agent create/edit |
 | Sync | `sync` | should mostly disappear behind `use`/activation |
 | Memory | import dry-run | intentionally deferred from the main path |

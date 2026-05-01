@@ -5,9 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/xz1220/agent-vm/internal/adapter"
 	"github.com/xz1220/agent-vm/internal/config"
 )
 
@@ -127,58 +125,6 @@ func TestCreateFromExistingProfileWithYes(t *testing.T) {
 	}
 	if agent.Identity.DisplayName != "default-opencode" {
 		t.Fatalf("display name = %q, want default-opencode", agent.Identity.DisplayName)
-	}
-}
-
-func TestCreateFromImportCandidateWithYes(t *testing.T) {
-	home := t.TempDir()
-	project := t.TempDir()
-	t.Setenv("HOME", home)
-	chdir(t, project)
-
-	if _, err := executeCommand("init"); err != nil {
-		t.Fatalf("init returned error: %v", err)
-	}
-	report := initImportReport{
-		Version:     initImportReportVersion,
-		GeneratedAt: time.Now().UTC().Format(time.RFC3339Nano),
-		Runtimes: []initRuntimeImportReport{
-			{
-				Runtime: "claude-code",
-				Found:   true,
-				AgentCandidates: []adapter.ImportedAgent{
-					{
-						Name:        "global-reviewer",
-						Description: "Review existing changes",
-						Instructions: adapter.Instructions{
-							Developer: "Review for correctness.",
-						},
-					},
-				},
-			},
-		},
-	}
-	if err := saveInitImportReport(initImportReportPath(), report); err != nil {
-		t.Fatalf("save import report: %v", err)
-	}
-
-	out, err := executeCommand("create", "--from-import", "claude-code/global-reviewer", "--name", "reviewer-copy", "--runtime", "opencode", "--yes")
-	if err != nil {
-		t.Fatalf("create from import returned error: %v\n%s", err, out)
-	}
-	if !strings.Contains(out, "created agent reviewer-copy from claude-code import candidate global-reviewer") {
-		t.Fatalf("unexpected create output:\n%s", out)
-	}
-
-	agent, err := config.ReadAgent("reviewer-copy", config.ScopeGlobal, project)
-	if err != nil {
-		t.Fatalf("read imported agent: %v", err)
-	}
-	if agent.Runtime.Preferred != "opencode" {
-		t.Fatalf("runtime = %q, want opencode", agent.Runtime.Preferred)
-	}
-	if agent.Instructions.Developer != "Review for correctness." {
-		t.Fatalf("developer instructions = %q", agent.Instructions.Developer)
 	}
 }
 

@@ -68,22 +68,6 @@ func TestDetectEdgeCases(t *testing.T) {
 	})
 }
 
-func TestImportIsReadOnlyPlaceholder(t *testing.T) {
-	result, err := codex.New(codex.WithConfigDir(t.TempDir())).Import(context.Background())
-	if err != nil {
-		t.Fatalf("import failed: %v", err)
-	}
-	if result.Runtime != "codex" {
-		t.Fatalf("runtime = %q, want codex", result.Runtime)
-	}
-	if len(result.Agents) != 0 {
-		t.Fatalf("placeholder import returned agents: %#v", result.Agents)
-	}
-	if len(result.Warnings) != 1 || !strings.Contains(result.Warnings[0], "read-only placeholder") {
-		t.Fatalf("unexpected import warnings: %#v", result.Warnings)
-	}
-}
-
 func TestPlanIsDeterministic(t *testing.T) {
 	ctx := context.Background()
 	a := codex.New(codex.WithConfigDir("/tmp/codex-home"))

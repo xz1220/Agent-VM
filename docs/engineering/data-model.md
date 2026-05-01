@@ -525,42 +525,7 @@ type FileState struct {
 
 ---
 
-## 9. Import 报告 `~/.avm/state/import-report.json`
-
-`avm init` 和 `avm import` 必须保存最近一次导入报告，便于用户确认候选对象，也便于测试验证只读导入行为。
-
-```json
-{
-  "generated_at": "2026-04-24T10:30:00Z",
-  "confirmed": {
-    "agents": ["reviewer"],
-    "mcps": ["github"],
-    "envs": ["imported-default"]
-  },
-  "candidates": [
-    {
-      "kind": "agent",
-      "name": "backend-rules",
-      "source_path": ".clinerules/backend.md",
-      "confidence": "medium",
-      "reason": "rules file may represent an agent instruction set"
-    }
-  ],
-  "runtime_extensions": {
-    "codex": {}
-  },
-  "ignored": [
-    {
-      "source_path": "AGENTS.md",
-      "reason": "project guidance imported as instruction reference only"
-    }
-  ]
-}
-```
-
----
-
-## 10. Export 包
+## 9. Export 包
 
 `avm export` 输出可迁移包，默认不包含 secrets。
 
