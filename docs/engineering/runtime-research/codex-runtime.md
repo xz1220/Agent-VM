@@ -10,11 +10,9 @@
 
 3. Codex **没有统一的 extension registry**。Skills、MCP、plugin、app 各有独立的发现路径和存储位置。PRD 所说的"全量发现"在 Codex 这里是**多源合并**，不是单表查询。
 
-4. Codex 的 **隔离不是一个开关**，而是 approval、sandbox policy、file-system policy、network policy、writable roots 五个正交维度的组合。PRD 的 runtime mapping 里把 sandbox 当单字段会丢语义。
+4. Codex 的状态边界是 `CODEX_HOME`（默认 `~/.codex`）。里面同时混了：config、auth、OAuth credentials、history.jsonl、sessions/*.jsonl rollout、SQLite state DB、SQLite logs DB、skills cache、plugins cache、memory artifacts、model cache。PRD 要做 agent/runtime 隔离边界，就要意识到这是个 **胖目录**，不是 portable profile。
 
-5. Codex 的状态边界是 `CODEX_HOME`（默认 `~/.codex`）。里面同时混了：config、auth、OAuth credentials、history.jsonl、sessions/*.jsonl rollout、SQLite state DB、SQLite logs DB、skills cache、plugins cache、memory artifacts、model cache。PRD 要做 agent/runtime 隔离边界，就要意识到这是个 **胖目录**，不是 portable profile。
-
-6. 命令级 approval 是 **per-session 内存缓存**，不持久化；但 sandbox policy、MCP 配置等是 durable。PRD 说"不管 memory 但要隔离运行状态"——这句里的"运行状态"要区分持久的（config/rollout/DB）和短暂的（approval cache）。
+5. 命令级 approval 是 **per-session 内存缓存**，不持久化；但 sandbox policy、MCP 配置等是 durable。PRD 说"不管 memory 但要隔离运行状态"——这句里的"运行状态"要区分持久的（config/rollout/DB）和短暂的（approval cache）。
 
 **验证局限**：当前环境没有 `cargo`，只做了源码追踪，没跑 `cargo run -- --help` 或 build。
 
@@ -30,7 +28,7 @@
 | **Agent 绑定 instructions** | Codex 有 `AGENTS.md`（从 `CODEX_HOME` 和项目树发现）+ developer instructions。AVM 可以 map 到 AGENTS.md 或直接注入 config。 | **可行**。 |
 | **Agent 绑定 skills（含来源区分）** | Skills 从 6 个 root 发现：项目 `.codex/skills`、`CODEX_HOME/skills`、user `~/.agents/skills`、bundled system、admin `/etc/codex/skills`、repo `.agents/skills`、configured extras、plugin roots。每个 skill 在 loader 里带 scope rank，plugin skill 还会加 namespace。 | **可行但有坑**。来源字段是现成的，但 AVM 要自己决定同名 skill 怎么合并/展示。 |
 | **Agent 绑定 MCP servers（含来源区分）** | MCP 来自：config entry、plugin manifest、skill dependency 自动安装（feature-gated，只允许 first-party）。`codex mcp add` 会直接写 global config。 | **可行但有坑**。"skill 声明依赖自动装 MCP"这条路径是 Codex 自己的行为，AVM 如果也在同一个 config 里写 MCP，要约定谁是 source of truth。 |
-| **Runtime mapping 状态：native / rendered_as_instructions / ignored / unsupported** | instructions、skills、MCP 三类都有 native 字段。sandbox/approval 也有 native 字段，但 Codex 把它拆成 5 维，AVM 单字段表达会降级。 | **可行**。四种状态都有地方落。 |
+| **Runtime mapping 状态：native / rendered_as_instructions / ignored / unsupported** | instructions、skills、MCP 三类都有 native 字段。sandbox/approval 拆成 5 维，Codex adapter 把这 5 个维度各自当一个 native 字段即可。 | **可行**。四种状态都有地方落。 |
 | **全量发现 skills/MCP（包括 runtime 全局目录里非 AVM 管理的）** | Skills loader 每次都扫全部 root；MCP 也是 config + plugin + skill-dep 的实时合并。AVM 只要在 create/edit 时调用类似的扫描逻辑即可。 | **可行**。 |
 | **AVM 不能静默覆盖 runtime 全局能力** | Codex 的 skill loader 按 scope 排序、不互删；`codex mcp add` 是显式写 global config。AVM 只要不主动改 `${CODEX_HOME}/skills/.system` 或 user config 里不属于它的键，就安全。 | **可行**。 |
 | **agent/runtime 隔离边界（不含 memory）** | 硬隔离只能靠切 `CODEX_HOME`（env var 支持）。切了之后 config、auth、history、rollout、state DB、memory 全部跟着走。 | **可行**。但这是"整个 Codex 实例隔离"，不是"同 Codex 下多 agent 隔离"。 |
@@ -93,7 +91,7 @@ requirement (代码内置最小约束)
 
 ## 五、隔离模型
 
-Codex 把隔离拆成五个独立维度，PRD 单字段 sandbox 会丢语义：
+Codex 把隔离拆成五个独立维度，Codex adapter 想 native 表达就要分别承接这些字段：
 
 | 维度 | 取值 | 源码 |
 |---|---|---|
@@ -121,7 +119,7 @@ Codex 把隔离拆成五个独立维度，PRD 单字段 sandbox 会丢语义：
 - Linux 路径：先 bubblewrap 设置 FS view，再 `no_new_privs` + seccomp，最后 `execvp`（`codex-rs/linux-sandbox/src/linux_run_main.rs:30-221`）。
 - Restricted network 对进程暴露为环境变量 `CODEX_SANDBOX_NETWORK_DISABLED`。
 
-**对 AVM 的含义**：AVM runtime mapping 想做到 native 表达，至少要能写 approval、sandbox 模式、writable roots 这三个字段。network 和 file-system policy 可以由前三个推导。
+**对 AVM 的含义**：Codex adapter 想做到 native 表达，至少要能写 approval、sandbox 模式、writable roots 这三个字段。network 和 file-system policy 可以由前三个推导。
 
 ---
 
@@ -256,17 +254,15 @@ session 把这三路合并成 effective list，交给 `McpConnectionManager`（`
 
 1. **PRD 2.3（能力边界）/ 4.2（全量发现）**：Codex 没有"单一 registry"。skills、MCP、plugin、app、skill-dep 各走各的路径。AVM 要自己定义合并和展示规则。
 
-2. **PRD 6（runtime mapping 状态）**：sandbox 在 Codex 是 5 维组合，AVM 单字段 sandbox 在这里至少要展开成 approval + sandbox mode + writable roots 三字段才能 round-trip；否则只能是 rendered_as_instructions 或 partial native。
+2. **PRD 4.2（不能静默接管）**：Codex 的 `codex mcp add` 会改 user config；skill-dep 自动安装 MCP 也会改 user config。AVM 如果和 Codex CLI 并存，要约定谁写什么键，否则会互相覆盖。
 
-3. **PRD 4.2（不能静默接管）**：Codex 的 `codex mcp add` 会改 user config；skill-dep 自动安装 MCP 也会改 user config。AVM 如果和 Codex CLI 并存，要约定谁写什么键，否则会互相覆盖。
+3. **PRD 4.4（运行透明）**：Codex 命令级 approval 不持久化，下次启动就重问一遍。PRD 要展示"哪些 runtime 已就绪"的时候，approval 状态不能缓存到 AVM 侧当成 durable 属性。
 
-4. **PRD 4.4（运行透明）**：Codex 命令级 approval 不持久化，下次启动就重问一遍。PRD 要展示"哪些 runtime 已就绪"的时候，approval 状态不能缓存到 AVM 侧当成 durable 属性。
+4. **PRD 4.6（memory）**："不管 memory" ≠ "memory 不发生"。Codex memory 会自动写盘、占 writable root、起后台 job。要么显式禁用，要么接受它的副作用。
 
-5. **PRD 4.6（memory）**："不管 memory" ≠ "memory 不发生"。Codex memory 会自动写盘、占 writable root、起后台 job。要么显式禁用，要么接受它的副作用。
+5. **PRD 3.3（Package）**：Codex plugin 语义比 AVM package 丰富（marketplace、版本、原子替换、manifest）。AVM package 导出为 Codex plugin 需要 schema 翻译；导出为"AVM 自己认"的 zip 则可以不碰 plugin 体系。
 
-6. **PRD 3.3（Package）**：Codex plugin 语义比 AVM package 丰富（marketplace、版本、原子替换、manifest）。AVM package 导出为 Codex plugin 需要 schema 翻译；导出为"AVM 自己认"的 zip 则可以不碰 plugin 体系。
-
-7. **PRD 3.4（Runtime）隔离粒度**：Codex 的硬隔离边界是 `CODEX_HOME`。想同机共存多个互不干扰的 Codex 状态，唯一方法是每个 agent 一个 `CODEX_HOME`——这会把 config/auth/history/rollout/DB/memory 全部分家，成本不小。
+6. **PRD 3.4（Runtime）隔离粒度**：Codex 的硬隔离边界是 `CODEX_HOME`。想同机共存多个互不干扰的 Codex 状态，唯一方法是每个 agent 一个 `CODEX_HOME`——这会把 config/auth/history/rollout/DB/memory 全部分家，成本不小。
 
 ---
 
