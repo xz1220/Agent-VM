@@ -1,245 +1,389 @@
 # OpenClaw 运行时调研
 
+> 目的：用源码事实评估 AVM PRD 的每项能力在 OpenClaw 上能否承接，以及 AVM adapter 必须兜底的行为边界。本文不提产品建议，只记录源码事实与对 PRD 的映射。
+>
+> 代码范围：`frameworks/openclaw/`（pnpm 10.33.0，node ≥ 22.12）。本文所有 `src/...` 路径相对 `frameworks/openclaw/`。
+
 ## 摘要
 
-本调研只追踪 `frameworks/openclaw` 源码事实，用于验证 Agent VM PRD 的运行时前提。
+核心判断：**OpenClaw 能承接 AVM PRD 的主要能力，但几乎没有默认安全兜底，都要 AVM adapter 显式启用或约束。**
 
-- OpenClaw 是 Node/TypeScript CLI。发布入口是 `openclaw.mjs`，`package.json` 将 `openclaw` bin 指向该文件；入口再加载构建产物 `dist/entry.js` 或 `dist/entry.mjs`。源码证据：`frameworks/openclaw/package.json:16`、`frameworks/openclaw/openclaw.mjs:191`、`frameworks/openclaw/openclaw.mjs:197`。
-- `openclaw agent` 默认走 Gateway RPC，`--local` 才直接走本地 embedded agent；Gateway 失败时命令层会 fallback 到本地。源码证据：`frameworks/openclaw/src/cli/program/register.agent.ts:26`、`frameworks/openclaw/src/commands/agent-via-gateway.ts:189`、`frameworks/openclaw/src/commands/agent-via-gateway.ts:198`。
-- Embedded agent 最终使用 `@mariozechner/pi-coding-agent` 的 session/agent runtime，构造模型、工具、skills、MCP、memory、workspace 后调用 `activeSession.prompt(...)` 启动 agent loop。源码证据：`frameworks/openclaw/src/agents/pi-embedded-runner/run/attempt.ts:1380`、`frameworks/openclaw/src/agents/pi-embedded-runner/run/attempt.ts:1540`、`frameworks/openclaw/src/agents/pi-embedded-runner/run/attempt.ts:2637`。
-- 隔离不是默认强隔离。Docker sandbox 默认 `mode: "off"`；没有 sandbox 时 shell 默认落到 host/gateway，执行安全级别默认可到 `"full"`，且 approval 默认 `"off"`；文件写入工具在 `workspaceOnly=false` 时允许写 host 任意路径。源码证据：`frameworks/openclaw/src/agents/sandbox/config.ts:220`、`frameworks/openclaw/src/agents/exec-defaults.ts:91`、`frameworks/openclaw/src/agents/pi-tools.read.ts:757`。
-- Skills 支持发现、加载、安装和环境变量注入，但本质是 prompt/files/install recipes，不是隔离的运行时模块。源码证据：`frameworks/openclaw/src/agents/skills/workspace.ts:533`、`frameworks/openclaw/src/agents/skills/workspace.ts:645`、`frameworks/openclaw/src/agents/skills-install.ts:457`。
-- Plugins 支持 manifest 发现、安装、加载和运行时注册工具、hook、provider、gateway method、memory 等能力，且加载后进入进程级 registry/cache。源码证据：`frameworks/openclaw/src/plugins/roots.ts:16`、`frameworks/openclaw/src/plugins/registry.ts:1438`、`frameworks/openclaw/src/plugins/loader.ts:2131`。
-- MCP 同时支持作为 client 连接外部 MCP server，并支持以 stdio server 暴露 OpenClaw built-in/plugin tools。配置型 MCP 支持 stdio/http/sse/streamable-http，bundle MCP runtime 当前按源码告警偏向 stdio。源码证据：`frameworks/openclaw/src/config/types.mcp.ts:1`、`frameworks/openclaw/src/agents/mcp-transport.ts:78`、`frameworks/openclaw/src/mcp/plugin-tools-serve.ts:2`、`frameworks/openclaw/src/plugins/loader.ts:2635`。
-- 默认可变状态集中在 state dir，默认 `~/.openclaw`；workspace memory 主要在 workspace 内，但 auth、sessions、plugin index、cache、logs、OAuth credentials 是 state-dir 级别。源码证据：`frameworks/openclaw/src/config/paths.ts:55`、`frameworks/openclaw/src/config/sessions/paths.ts:10`、`frameworks/openclaw/src/config/paths.ts:227`。
+- OpenClaw 是 Node/TS CLI，本质是 `@mariozechner/pi-coding-agent` 的壳：CLI → `pi` session runtime → agent loop。
+- 默认执行路径是 **Gateway RPC**；`--local` 走 embedded；Gateway 失败会 fallback 到本地。
+- 默认 **非隔离**：sandbox=off、workspaceOnly=false、approval=off；host 文件工具可写任意路径，exec 落到 host/gateway。
+- 状态默认集中在 `~/.openclaw`：sessions / auth / plugin index / cache / logs / OAuth。workspace 默认 `~/.openclaw/workspace`。
+- Skills / Plugins / MCP server **都能执行 host command 或加载进程内代码**。AVM 若不做白名单，等于把 host shell 暴露给模型。
+- AVM 可以干净映射的 PRD 字段：Agent identity、instructions、skills、MCP、runtime config、package 安装、run 透明度。需要额外兜底的：能力来源发现、isolation、memory 边界、并发进程状态。
 
-安全验证命令结果：
+详细证据见 §7 附录。
 
-- `node --version` 成功，版本 `v22.22.0`。
-- `pnpm --dir frameworks/openclaw --version` 成功，版本 `10.33.0`。
-- `node frameworks/openclaw/openclaw.mjs --help` 失败，原因是当前源码树缺少 `dist/entry.(m)js` 构建产物；这与入口源码的 missing dist 分支一致。源码证据：`frameworks/openclaw/openclaw.mjs:191`、`frameworks/openclaw/openclaw.mjs:197`。
+## 1. OpenClaw 运行时模型
 
-## 运行时启动路径
+### 1.1 启动链路
 
-### CLI 启动引导
+```
+npm bin `openclaw`
+ └─ openclaw.mjs           # node ≥ 22.12, ESM; 检查 dist
+    └─ dist/entry.(m)js    # 需要 pnpm build 产物
+       └─ src/entry.ts     # profile / container / auth 初始化
+          └─ runMainOrRootHelp()
+             └─ runCli()   # 加载 .env / normalize proxy
+                └─ commander program (agent / gateway / skills / plugins / mcp)
+```
 
-1. NPM bin 入口是 `openclaw.mjs`。`package.json` 中 `bin.openclaw` 指向 `openclaw.mjs`，包类型是 ESM。源码证据：`frameworks/openclaw/package.json:16`、`frameworks/openclaw/package.json:55`。
-2. `openclaw.mjs` 先检查 Node 版本，要求 `>=22.12.0`；帮助类参数有快速路径；正常路径加载 `dist/entry.js` 或 `dist/entry.mjs`，缺失时抛出构建产物错误。源码证据：`frameworks/openclaw/openclaw.mjs:8`、`frameworks/openclaw/openclaw.mjs:128`、`frameworks/openclaw/openclaw.mjs:191`、`frameworks/openclaw/openclaw.mjs:197`。
-3. 源码入口 `src/entry.ts` 设置 process title、exec marker、只读 auth 初始化、profile/container 解析，然后调用 `runMainOrRootHelp`。源码证据：`frameworks/openclaw/src/entry.ts:45`、`frameworks/openclaw/src/entry.ts:67`、`frameworks/openclaw/src/entry.ts:100`。
-4. `runMainOrRootHelp` 动态 import `./cli/run-main.js` 并调用 `runCli(argv)`。源码证据：`frameworks/openclaw/src/entry.ts:175`。
-5. `run-main.ts` 从当前目录或 state dir 的 `.env` 加载环境变量，规范化 proxy/CLI path/runtime guard 后构造 Commander program。源码证据：`frameworks/openclaw/src/cli/run-main.ts:173`、`frameworks/openclaw/src/cli/run-main.ts:180`、`frameworks/openclaw/src/cli/run-main.ts:286`。
-6. Commander program 注册 `agent`、`gateway`、`skills`、`plugins`、`mcp` 等子命令。源码证据：`frameworks/openclaw/src/cli/program/build-program.ts:9`、`frameworks/openclaw/src/cli/program/build-program.ts:16`。
+证据：`package.json:16`、`openclaw.mjs:8,128,191,197`、`src/entry.ts:45,67,100,175`、`src/cli/run-main.ts:173,180,286`、`src/cli/program/build-program.ts:9`。
 
-### Agent 命令路径
+### 1.2 Agent 执行的两条路径
 
-1. `openclaw agent` 的描述明确为 “Run an agent turn via Gateway (use --local for embedded)”，并提供 `--local`、`--workspace`、`--session`、`--provider`、`--model` 等参数。源码证据：`frameworks/openclaw/src/cli/program/register.agent.ts:26`、`frameworks/openclaw/src/cli/program/register.agent.ts:44`、`frameworks/openclaw/src/cli/program/register.agent.ts:60`。
-2. `agentCliCommand` 默认先调用 `agentCommandViaGateway`；如果 `--local` 被设置则直接调用 `agentCommand`；Gateway 路径报错后会 fallback 到本地执行。源码证据：`frameworks/openclaw/src/commands/agent-via-gateway.ts:189`、`frameworks/openclaw/src/commands/agent-via-gateway.ts:198`。
-3. Gateway CLI 启动时解析 config、端口和 auth；非 loopback bind 在无 auth 且无 token bootstrap/trusted proxy 时会拒绝。源码证据：`frameworks/openclaw/src/cli/gateway-cli/run.ts:418`、`frameworks/openclaw/src/cli/gateway-cli/run.ts:561`、`frameworks/openclaw/src/cli/gateway-cli/run.ts:644`。
-4. Gateway server 注册 core handlers，其中包含 `agentHandlers`；每个 RPC method 会经过 role/scope 授权，再在 plugin runtime request scope 内执行。源码证据：`frameworks/openclaw/src/gateway/server-methods.ts:73`、`frameworks/openclaw/src/gateway/server-methods.ts:110`。
-5. `agent` RPC handler 解析 sender owner、model override 权限、session key、workspace、delivery policy、abort controller，然后调用 `agentCommandFromIngress`。源码证据：`frameworks/openclaw/src/gateway/server-methods/agent.ts:387`、`frameworks/openclaw/src/gateway/server-methods/agent.ts:442`、`frameworks/openclaw/src/gateway/server-methods/agent.ts:768`、`frameworks/openclaw/src/gateway/server-methods/agent.ts:1054`、`frameworks/openclaw/src/gateway/server-methods/agent.ts:1140`。
-6. `agentCommandFromIngress` 要求调用方显式传入 `senderIsOwner` 和 `allowModelOverride`；本地命令路径则默认 trusted owner 且允许 model override。源码证据：`frameworks/openclaw/src/agents/agent-command.ts:1154`、`frameworks/openclaw/src/agents/agent-command.ts:1174`。
+```
+openclaw agent ...
+        │
+    ┌───┴────────────────────┐
+    │ 默认：Gateway RPC      │  --local：embedded 短进程
+    └───┬────────────────────┘
+        │
+  gateway/server-methods/agent.ts
+        │
+  agentCommandFromIngress → agentCommand
+        │
+  runWithModelFallback → runAgentAttempt
+        │
+    ┌───┴─────────────────┐
+    │ runCliAgent         │ runEmbeddedPiAgent
+    │ (provider=cli)      │ (provider=llm)
+    └───┬─────────────────┘
+        │
+  runEmbeddedAttempt
+    - load workspace / sandbox ctx
+    - resolve skills / tools
+    - materialize MCP / LSP tools
+    - open session manager
+    - activeSession.prompt(prompt)
+```
 
-### Agent 准备与循环
+Gateway 路径默认，`--local` 显式本地；Gateway 失败会 fallback 到本地。非 loopback bind 要求 auth + token bootstrap / trusted proxy。
 
-1. `prepareAgentCommandExecution` 负责解析 agent runtime config、session、workspace、agentDir，并调用 `ensureAgentWorkspace`。源码证据：`frameworks/openclaw/src/agents/agent-command.ts:251`、`frameworks/openclaw/src/agents/agent-command.ts:295`、`frameworks/openclaw/src/agents/agent-command.ts:356`。
-2. 新 session 或 stale session 会构建 workspace skill snapshot，并持久化进 session store。源码证据：`frameworks/openclaw/src/agents/agent-command.ts:591`、`frameworks/openclaw/src/agents/agent-command.ts:631`。
-3. 模型解析包含默认 provider/model、allowlist/catalog 校验，以及仅在授权时接受显式 override。源码证据：`frameworks/openclaw/src/agents/agent-command.ts:679`、`frameworks/openclaw/src/agents/agent-command.ts:761`。
-4. 执行层通过 `runWithModelFallback` 调用 `runAgentAttempt`；CLI provider 走 `runCliAgent`，否则走 `runEmbeddedPiAgent`。源码证据：`frameworks/openclaw/src/agents/agent-command.ts:901`、`frameworks/openclaw/src/agents/command/attempt-execution.ts:306`、`frameworks/openclaw/src/agents/command/attempt-execution.ts:426`。
-5. `runEmbeddedPiAgent` 在每个 session 或全局 lane 中排队执行，加载 runtime plugins，解析 provider/model/plugin harness/auth profile，然后进入 attempt。源码证据：`frameworks/openclaw/src/agents/pi-embedded-runner/run.ts:239`、`frameworks/openclaw/src/agents/pi-embedded-runner/run.ts:253`、`frameworks/openclaw/src/agents/pi-embedded-runner/run.ts:287`、`frameworks/openclaw/src/agents/pi-embedded-runner/run.ts:317`、`frameworks/openclaw/src/agents/pi-embedded-runner/run.ts:421`。
-6. `runEmbeddedAttempt` 创建 workspace/sandbox context、解析 skills、创建工具、materialize MCP/LSP bundled tools、构造 system prompt、打开 session manager、创建 Pi agent session、绑定 stream function，最后 `activeSession.prompt(...)` 提交用户 prompt。源码证据：`frameworks/openclaw/src/agents/pi-embedded-runner/run/attempt.ts:569`、`frameworks/openclaw/src/agents/pi-embedded-runner/run/attempt.ts:612`、`frameworks/openclaw/src/agents/pi-embedded-runner/run/attempt.ts:684`、`frameworks/openclaw/src/agents/pi-embedded-runner/run/attempt.ts:854`、`frameworks/openclaw/src/agents/pi-embedded-runner/run/attempt.ts:1037`、`frameworks/openclaw/src/agents/pi-embedded-runner/run/attempt.ts:1224`、`frameworks/openclaw/src/agents/pi-embedded-runner/run/attempt.ts:1380`、`frameworks/openclaw/src/agents/pi-embedded-runner/run/attempt.ts:1540`、`frameworks/openclaw/src/agents/pi-embedded-runner/run/attempt.ts:2637`。
+证据：`src/cli/program/register.agent.ts:26,44,60`、`src/commands/agent-via-gateway.ts:189,198`、`src/cli/gateway-cli/run.ts:418,561,644`、`src/gateway/server-methods/agent.ts:387,442,1140`、`src/agents/agent-command.ts:901,1154,1174`、`src/agents/pi-embedded-runner/run/attempt.ts:1380,1540,2637`。
 
-## 隔离模型
+### 1.3 状态与工作目录默认值
 
-### 工作区/root 边界
+| 状态 | 默认路径 | 覆盖方式 |
+| --- | --- | --- |
+| state dir | `~/.openclaw` | `OPENCLAW_STATE_DIR` |
+| config | `<stateDir>/openclaw.json` | `OPENCLAW_CONFIG_PATH` |
+| agent dir | `<stateDir>/agents/<agentId>/agent` | `OPENCLAW_AGENT_DIR` / `PI_CODING_AGENT_DIR` |
+| workspace | `~/.openclaw/workspace`（profile 时加后缀） | `--workspace` / ingress workspace |
+| sessions | `<stateDir>/agents/<agentId>/sessions/` | — |
+| OAuth 凭据 | `<stateDir>/credentials/oauth.json` | — |
+| transcript | session 目录 JSONL，mode 0600 | — |
+| tmp | `/tmp/openclaw`（非 symlink, 0700） | uid-owned fallback |
 
-- Agent workspace 默认来自配置；没有配置时，main/default agent 使用默认 workspace，非默认 agent 使用 state dir 下 `workspace-${agentId}`。源码证据：`frameworks/openclaw/src/agents/agent-scope-config.ts:154`、`frameworks/openclaw/src/agents/workspace-default.ts:6`。
-- 默认 workspace 路径是 `$HOME/.openclaw/workspace`，profile 模式会变成 `$HOME/.openclaw/workspace-${profile}`。源码证据：`frameworks/openclaw/src/agents/workspace-default.ts:6`、`frameworks/openclaw/src/agents/workspace-default.ts:12`。
-- workspace 初始化会创建目录、bootstrap 文件和 `.openclaw/workspace-state.json`，必要时初始化 git。源码证据：`frameworks/openclaw/src/agents/workspace.ts:27`、`frameworks/openclaw/src/agents/workspace.ts:467`。
-- runtime 对部分 workspace 文件读取使用 boundary open 和 max size 限制。源码证据：`frameworks/openclaw/src/agents/workspace.ts:54`、`frameworks/openclaw/src/infra/boundary-file-read.ts:69`、`frameworks/openclaw/src/infra/fs-safe.ts:207`。
-- 但显式 `--workspace` 或 ingress workspace 可进入 session/run workspace 解析，源码层主要做路径解析和 session key 校验；没有发现 OpenClaw 对 host 目录的统一 allowlist。源码证据：`frameworks/openclaw/src/agents/workspace-run.ts:74`、`frameworks/openclaw/src/agents/workspace-run.ts:105`。
+证据：`src/config/paths.ts:55,101,227`、`src/utils.ts:130`、`src/agents/workspace-default.ts:6,12`、`src/agents/agent-paths.ts:6`、`src/config/sessions/paths.ts:10,240`、`src/config/sessions/transcript.ts:19`、`src/infra/tmp-openclaw-dir.ts:5,33,75`。
+
+## 2. PRD 能力在 OpenClaw 上的可行性
+
+按 PRD 的产品要求逐条判断 OpenClaw 是否提供原生承接，以及 AVM adapter 需要做什么。承接度沿用 PRD 的 mapping 语义（native / rendered_as_instructions / ignored / unsupported）。
+
+### 2.1 PRD §2.1 & §4.2：Agent 配置 CRUD
+
+**AVM 要求**：用户管理 Agent（identity、instructions、skills、MCP、runtime config）；skills/MCP 候选列表来自"全量实时发现"，包括 runtime 全局目录和 AVM 未管理的资源。
+
+**OpenClaw 上的事实**：
+
+| AVM 字段 | OpenClaw 承接 | 细节 |
+| --- | --- | --- |
+| identity (name / desc) | native | agent id 落在 `<stateDir>/agents/<agentId>/agent`；OpenClaw 本身没有 "role" 字段 |
+| instructions | native | session startup 把指令构造进 system prompt |
+| skills | native | 多 root 发现 + precedence 合并（见 §3.2） |
+| MCP servers | native | config `mcp.servers`（stdio / http / sse / streamable-http） |
+| runtime config | native | model / provider / approval / sandbox / workspace 是一等字段 |
+| role 等 AVM 扩展元数据 | unsupported | OpenClaw 没有对应概念，需 AVM rendered_as_instructions 或 ignored |
+
+**全量发现**：skills loader 合并 7 个 root（bundled / managed / workspace / extraDirs / plugin / personal `~/.agents/skills` / project `<ws>/.agents/skills`），按 precedence 排序。AVM 在 UI 上要做的：
+- 把 candidate list 归一成 AVM Agent 字段，保留 origin（AVM-managed / package / runtime-global）。
+- 同名冲突必须显式呈现。OpenClaw 是 last-wins，不能直接透传给用户。
+
+证据：`src/agents/skills/workspace.ts:533,561,579,645`、`src/config/types.mcp.ts:1,9`。
+
+**结论**：✅ 可实现。AVM adapter 把 OpenClaw skills/plugins/MCP 发现结果渲染进 Agent create/edit UI 即可。
+
+### 2.2 PRD §2.2 & §4.4：用户选 Agent，不选 runtime
+
+**AVM 要求**：`avm run <agent>`；runtime 由 AVM 解析或让用户确认；不静默选择。
+
+**OpenClaw 上的事实**：
+- OpenClaw 自己只有一个 runtime（就是它自己），runtime 多选的问题在 AVM 层解决，不在 OpenClaw 内部。
+- OpenClaw 的 session/agentId 是**状态 key**，不是 AVM 意义上的用户可复用配置。AVM 要决定把 AVM Agent 稳定映射到哪个 OpenClaw `agentId`。
+
+**AVM adapter 职责**：
+1. 把 `avm run <agent>` 映射为 `openclaw agent ...`，并注入：
+   - `OPENCLAW_STATE_DIR` / `OPENCLAW_CONFIG_PATH` / `OPENCLAW_AGENT_DIR`（per-Agent 隔离，见 §3.3）
+   - `--workspace` / `--session` / `--provider` / `--model`
+2. 选定 Gateway 还是 `--local`，并保持稳定——混用会导致 session/auth 分叉。
+3. 把 AVM Agent identity 映射成稳定 `agentId`，让 sessions/auth 可持续复用。
+
+**结论**：✅ 可实现，前提是 AVM 为 OpenClaw 选定一种调用模式。
+
+### 2.3 PRD §2.3 & §4.2：能力边界与 mapping status
+
+**AVM 要求**：每个能力解释来源；adapter 无法表达时明确标注 native / rendered_as_instructions / ignored / unsupported。
+
+**OpenClaw 的字段承接**：
+
+| AVM 能力 | OpenClaw 状态 | 说明 |
+| --- | --- | --- |
+| system/developer instructions | native | 支持 reference files |
+| skills 选择 | native | frontmatter + SKILL.md prompt 注入 |
+| MCP server 连接 | native | 多 transport，OAuth |
+| 工具权限 allowlist | native | `tool-policy` owner/subagent/leaf filter |
+| 审批策略 (approval) | native | full / moderate / strict |
+| 写入范围 (workspaceOnly) | native | tool-fs-policy |
+| sandbox (docker) | native | `sandbox.mode=docker` |
+| env override | native (per-skill) | `skills/env-overrides` |
+| 启动/安装脚本 | native | skill frontmatter `install` |
+| role / team / tenant 等 AVM 扩展字段 | unsupported | 只能 rendered_as_instructions 或 ignored |
+
+mapping status 必须由 AVM 在 run preview 中展示，这是 OpenClaw 自己不会做的事。
+
+证据：`src/agents/tool-policy.ts:22,54`、`src/agents/pi-tools.policy.ts:34,49`、`src/agents/exec-defaults.ts:43,91,124`、`src/agents/tool-fs-policy.ts:11,29`、`src/agents/sandbox/config.ts:220`、`src/agents/skills/env-overrides.ts:24`、`src/agents/skills/frontmatter.ts:112`。
+
+**结论**：✅ 主要能力有 native 映射，少数 AVM 扩展字段要 rendered_as_instructions / ignored。
+
+### 2.4 PRD §2.4 & §4.5：可信复用（Package）
+
+**AVM 要求**：Package 是分发单元；安装前展示写入内容；冲突处理清楚；export 可选包含 skills/MCP；不把 runtime 原生文件伪装成 AVM 对象。
+
+**OpenClaw 上的事实**：
+- OpenClaw 有 **plugin** 概念（manifest + runtime registry），但 plugin ≠ AVM Package。plugin manifest 可以声明 skills / mcpServers / commands / agents / hooks。
+- Plugin 安装：archive/package 下载 → security scan → 索引到 `<stateDir>/plugins/installs.json`。可被 `--dangerously-force-unsafe-install` 绕过。
+- Skill 可以通过 ClawHub slug 安装到 `<workspace>/skills/<slug>`。
+- Skill install recipe 支持 `brew / node / go / uv / download`，download 限定 http/https，落到 per-skill tools root。
+
+**AVM adapter 职责**：
+- AVM Package 不直接等同于 OpenClaw plugin：AVM Package 跨 runtime，plugin 只在 OpenClaw 生效。
+- 安装 AVM Package 时，落到 OpenClaw 的部分走 OpenClaw 的 skill/mcp/plugin 安装路径；AVM 记录来源。
+- export 时不要把 OpenClaw 管理的 skills/plugins 当作 AVM 所有物——这是 PRD §2.4 明确禁止的"伪装"行为。
+
+证据：`src/plugins/loader.ts:2603,2788`、`src/plugins/install.ts:39,769`、`src/plugins/installed-plugin-index-store-path.ts:4,20`、`src/cli/plugins-cli.ts:760`、`src/agents/skills-clawhub.ts:18,122,144`、`src/agents/skills/frontmatter.ts:93,112`、`src/agents/skills-install.ts:457,503,549`、`src/agents/skills-install-download.ts:31`。
+
+**结论**：✅ 可实现，关键是 AVM 明确区分 "AVM 分发" vs "OpenClaw 原生分发"。
+
+### 2.5 PRD §2.5 & §4.4：运行透明
+
+**AVM 要求**：每次 run 能解释 Agent、runtime、managed paths、memory boundary、warnings；adapter mapping 在 preview/run 输出展示。
+
+**OpenClaw 暴露的运行元数据**：
+- session key / agentId / workspace：session store 可读。
+- transcript：`<stateDir>/agents/<agentId>/sessions/*.jsonl`，0600。
+- skill snapshot：session 创建/stale 时存 snapshot。
+- mapping diagnostics：OpenClaw 对 unsupported MCP transport / bundle MCP 会产生 warning。
+
+**AVM adapter 职责**：
+- Run preview 显示 agentId、workspace、agentDir、session key、启用 skills/MCP 列表、mapping status。
+- 把 OpenClaw 的 warning（MCP transport / plugin compat / skill loader truncation）翻译为 AVM warning 暴露给用户。
+- AVM 内部同步（config 写入、skill 拷贝）对用户透明。
+
+证据：`src/config/sessions/paths.ts:10,240`、`src/config/sessions/transcript.ts:19`、`src/config/sessions/store.ts:232,411`、`src/agents/agent-command.ts:591,631`、`src/agents/skills/workspace.ts:814`、`src/agents/mcp-transport-config.ts:95`、`src/plugins/loader.ts:2635`。
+
+**结论**：✅ 可实现，数据全在 OpenClaw 侧可读。
+
+### 2.6 PRD §2.6 & §4.6：不管理运行记忆，只隔离
+
+**AVM 要求**：不提供 memory CRUD；保证同一 Agent/runtime 的 memory 在稳定 boundary 里，不跨 Agent 串。
+
+**OpenClaw 上的事实**：
+- Workspace 内 memory：`<workspace>/MEMORY.md`、`<workspace>/memory/**/*.md`、event log `memory/.dreams/events.jsonl`。canonical memory file 禁 symlink。
+- Memory backend 可额外加载 agent workspace / config extra paths / sessions。
+- **Memory plugin state 是进程级全局对象**——这是最大的隐患。
+
+**AVM adapter 职责**：
+- 用 per-Agent workspace 就能天然把 memory 隔离开。
+- 不要把 memory 拷到 AVM 侧作为 "AVM memory"。
+- **不要复用同一个 OpenClaw 进程跑不同 AVM Agent**。推荐每个 AVM run 起独立 OpenClaw 进程（见 §3.1）。
+
+证据：`src/memory/root-memory-files.ts:4,33`、`src/memory-host-sdk/host/backend-config.ts:329,350`、`src/memory-host-sdk/events.ts:5`、`src/plugins/memory-state.ts:159,202`。
+
+**结论**：✅ 可实现，但约束是"不要跨 Agent 共享 OpenClaw 进程"。
+
+## 3. 适配关键数据边界
+
+### 3.1 CLI / Gateway 调用模式对比
+
+| 模式 | 优点 | 缺点 | 适合 |
+| --- | --- | --- | --- |
+| `--local` embedded | 进程自持，状态明确；无网络 | 每次冷启；无法跨进程共享 session | AVM 每次 run 单独启 |
+| Gateway 常驻 | 可复用 session；支持 RPC | auth 管理复杂；plugin/memory 进程级状态会跨 agent 串 | 多 client 并发场景 |
+
+两条路径都被 OpenClaw 支持；AVM 选哪条是 PRD 未决问题（§5）。
+
+### 3.2 Skills 发现与安装
+
+**发现 root 优先级**（升序，后者覆盖前者）：
+
+```
+extraDirs < bundled < managed < personal (~/.agents/skills) < project (<ws>/.agents/skills) < workspace
+```
+
+**安装可执行动作**：
+- `brew / node / go / uv / download`（HTTP/HTTPS 限定）
+- 写入 per-skill tools root，禁止跳出
+- 进程级 env override，带屏蔽危险变量清单
+
+**AVM 注意**：
+- skill install 可执行 host command。AVM 必须把 install 视为高风险动作，做用户确认。
+- personal/project skills 会被 OpenClaw 自动发现，AVM 不能假设 "只有 AVM 管理的 skills 生效"。
+
+证据：`src/agents/skills/workspace.ts:533,561,579`、`src/agents/skills/frontmatter.ts:93,112`、`src/agents/skills-install.ts:457,503,549`、`src/agents/skills-install-download.ts:31`、`src/agents/skills/tools-dir.ts:7`、`src/agents/skills/env-overrides.ts:24,37,83`。
+
+### 3.3 Per-Agent 隔离的最小注入集
+
+让 OpenClaw 在每次 `avm run <agent>` 使用独立状态：
+
+```bash
+OPENCLAW_STATE_DIR=~/.avm/runtimes/openclaw/<avm-agent-id>
+OPENCLAW_CONFIG_PATH=~/.avm/runtimes/openclaw/<avm-agent-id>/openclaw.json
+OPENCLAW_AGENT_DIR=~/.avm/runtimes/openclaw/<avm-agent-id>/agent
+# workspace 通过 CLI flag
+openclaw agent --workspace <avm-workspace> --session <avm-session-key>
+```
+
+这样 sessions / auth / plugin index / cache / logs / OAuth 都落到 per-Agent 目录，不污染 `~/.openclaw`。
+
+### 3.4 Plugin / MCP 边界
+
+- **Plugin**：AVM 控制 `plugin roots`（config extraRoots）和 enable list。默认发现 bundled / global `<configDir>/extensions` / workspace `<workspace>/.openclaw/extensions` / config 额外路径。
+- **MCP client**：AVM 下发的 server 列表进 `mcp.servers`。stdio server 会 spawn configured command——视同授予 host 权限。
+- **MCP server (OpenClaw 作为 server)**：暴露 built-in / plugin tools。若 AVM 需要这种形态，必须 audit 可暴露 tools 清单。
+
+证据：`src/plugins/roots.ts:16,29`、`src/plugins/loader.ts:2131,2311,2788`、`src/agents/mcp-stdio-transport.ts:27`、`src/agents/mcp-http.ts:19`、`src/mcp/openclaw-tools-serve.ts:2`、`src/mcp/plugin-tools-serve.ts:2`、`src/mcp/plugin-tools-handlers.ts:21,53`。
+
+## 4. 默认不安全项清单（AVM 必须兜底）
+
+| OpenClaw 默认 | 风险 | AVM 兜底策略 |
+| --- | --- | --- |
+| `sandbox.mode=off` | host 级执行无 OS 隔离 | 依赖可用时默认 `sandbox.mode=docker`；否则 exec 降级到 preview-only |
+| `workspaceOnly=false` | 文件工具可写 host 任意路径 | 默认注入 `workspaceOnly=true` |
+| `approval=off` | 无交互批准即执行 | 注入 `approval=moderate` 或更高 |
+| exec host=auto | 可能走 gateway/host shell | 强制 `host: sandbox` 或白名单 |
+| 默认 workspace `~/.openclaw/workspace` | 跨 Agent 共享 | 每 Agent 独立 workspace |
+| MCP stdio 可 spawn 任意 command | 等同给 model host shell | 白名单 + per-Agent env 注入 |
+| plugin/skill install 可跑 host command | 同上 | install 动作需用户显式确认 |
+| 全局 state in `~/.openclaw` | 跨 Agent 数据串扰 | `OPENCLAW_STATE_DIR` per-Agent |
+| memory plugin state 进程级 | 同一进程跨 Agent 串 memory | per-run 独立 OpenClaw 进程 |
+
+证据：`src/agents/sandbox/config.ts:220`、`src/agents/tool-fs-policy.ts:11`、`src/agents/pi-tools.read.ts:751,757,785`、`src/agents/exec-defaults.ts:91,124`、`src/agents/bash-tools.exec-runtime.ts:681,708`、`src/agents/mcp-stdio-transport.ts:27`、`src/agents/skills-install.ts:457`、`src/plugins/loader.ts:2788`、`src/plugins/memory-state.ts:202`。
+
+## 5. 未决问题（PRD 需要决策）
+
+1. **调用模式**：AVM 使用 OpenClaw Gateway 常驻服务还是每次 `--local`？源码两条路径都支持，但 session 生命周期、auth surface、并发模型不同。
+2. **Docker sandbox**：AVM 自己提供外层 sandbox（VM / container），还是启用 OpenClaw 内置 Docker sandbox？后者需要部署前置检查 Docker。
+3. **Skill / Plugin / MCP 白名单**：AVM 支持 OpenClaw 生态全量，还是只允许白名单？PRD §2.4 要求来源可追踪，倾向白名单 + 明示来源。
+4. **遗留 `~/.openclaw` 数据迁移**：已有用户的 `~/.openclaw` 是否迁移到 per-Agent 目录？源码有 legacy/compat 路径。
+
+## 6. 验证状态
+
+- ✅ `node --version` → v22.22.0
+- ✅ `pnpm --dir frameworks/openclaw --version` → 10.33.0
+- ❌ `node frameworks/openclaw/openclaw.mjs --help` —— 缺 `dist/entry.(m)js`，对应 `openclaw.mjs:191,197` 的已知分支。pnpm build 后可再验证。
+
+## 7. 源码证据索引
+
+按主题归类，方便交叉引用；文中已在关键结论处内联。
+
+### 入口与命令
+
+- `package.json:16` —— bin 指向 `openclaw.mjs`
+- `openclaw.mjs:8,128,191,197` —— node 版本检查 / 帮助快速路径 / dist 加载
+- `src/entry.ts:45,67,100,175` —— profile / container / auth 初始化
+- `src/cli/run-main.ts:173,180,286` —— `.env` 加载 / proxy normalize
+- `src/cli/program/build-program.ts:9,16` —— 子命令注册
+- `src/cli/program/register.agent.ts:26,44,60` —— agent 子命令
+
+### Gateway / Agent dispatch
+
+- `src/commands/agent-via-gateway.ts:189,198` —— default gateway + local fallback
+- `src/cli/gateway-cli/run.ts:418,561,644` —— bind / auth
+- `src/gateway/server-methods.ts:73,110` —— core handlers / 授权
+- `src/gateway/server-methods/agent.ts:387,442,768,1054,1140` —— agent handler
+- `src/agents/agent-command.ts:251,295,356,591,631,679,761,901,1154,1174` —— prepare / workspace / model / ingress
+
+### Embedded runtime
+
+- `src/agents/pi-embedded-runner/run.ts:239,253,287,317,421`
+- `src/agents/pi-embedded-runner/run/attempt.ts:569,612,684,854,905,1037,1224,1380,1540,2637`
+
+### Sandbox / exec
+
+- `src/agents/sandbox/config.ts:101,220,240` —— mode / backend / workspace-access
+- `src/agents/sandbox/docker.ts:391` —— docker 硬化
+- `src/agents/sandbox/validate-sandbox-security.ts:20,39,359` —— mount 校验
+- `src/agents/exec-defaults.ts:43,91,124` —— host / approval / security
+- `src/agents/bash-tools.exec-host-gateway.ts:95,173` —— allowlist / approval
+- `src/agents/bash-tools.exec.ts:1536`、`src/agents/bash-tools.exec-runtime.ts:681,708` —— runtime
+- `src/infra/exec-approvals.ts:169` —— approval
 
 ### 文件工具
 
-- 文件工具策略默认 `workspaceOnly=false`；只有 config/global/agent 明确设为 true，读写工具才被 workspace root guard 约束。源码证据：`frameworks/openclaw/src/agents/tool-fs-policy.ts:11`、`frameworks/openclaw/src/agents/tool-fs-policy.ts:29`。
-- `read` 工具只有在 `workspaceOnly` 生效时才包 workspace root guard；否则可按工具自身规则读 host path。源码证据：`frameworks/openclaw/src/agents/pi-tools.ts:456`、`frameworks/openclaw/src/agents/tool-fs-policy.ts:36`。
-- host write/edit 工具在 `workspaceOnly=false` 时源码注释和实现都允许写 host 任意路径；`workspaceOnly=true` 时才调用 within-root 写入。源码证据：`frameworks/openclaw/src/agents/pi-tools.read.ts:751`、`frameworks/openclaw/src/agents/pi-tools.read.ts:757`、`frameworks/openclaw/src/agents/pi-tools.read.ts:785`。
-- `apply_patch` 默认 workspace-only；sandbox read-only 时会禁用 apply_patch。源码证据：`frameworks/openclaw/src/agents/pi-tools.ts:428`、`frameworks/openclaw/src/agents/pi-tools.ts:543`。
+- `src/agents/tool-fs-policy.ts:11,29,36` —— workspaceOnly 默认 false
+- `src/agents/pi-tools.ts:428,456,543` —— read / apply_patch
+- `src/agents/pi-tools.read.ts:751,757,785` —— host write/edit 允许任意路径
+- `src/agents/workspace.ts:27,54,467` —— workspace init
+- `src/agents/workspace-default.ts:6,12` —— 默认 `~/.openclaw/workspace`
+- `src/agents/workspace-run.ts:74,105` —— `--workspace` 解析
+- `src/infra/boundary-file-read.ts:69`、`src/infra/fs-safe.ts:207` —— bounded read
 
-### Shell/命令执行
+### Skills
 
-- sandbox 配置默认 `mode: "off"`，backend 默认 Docker，workspace access 默认 `"none"`。源码证据：`frameworks/openclaw/src/agents/sandbox/config.ts:220`、`frameworks/openclaw/src/agents/sandbox/config.ts:240`。
-- Docker backend 默认包含较强约束：read-only root、tmpfs、network none、drop capabilities、no-new-privileges 等。源码证据：`frameworks/openclaw/src/agents/sandbox/config.ts:101`、`frameworks/openclaw/src/agents/sandbox/docker.ts:391`。
-- Docker bind mount 有安全校验，会阻止敏感 host 路径、危险 home 子路径、host network、container namespace join 等 footgun。源码证据：`frameworks/openclaw/src/agents/sandbox/validate-sandbox-security.ts:20`、`frameworks/openclaw/src/agents/sandbox/validate-sandbox-security.ts:39`、`frameworks/openclaw/src/agents/sandbox/validate-sandbox-security.ts:359`。
-- 没有 sandbox 时，exec host 默认 `auto` 会解析到 gateway/host；安全级别默认可能是 `"full"`，approval 默认 `"off"`。源码证据：`frameworks/openclaw/src/agents/exec-defaults.ts:43`、`frameworks/openclaw/src/agents/exec-defaults.ts:91`、`frameworks/openclaw/src/agents/exec-defaults.ts:124`。
-- host/gateway exec 仍有 allowlist/approval 机制，但这是配置和 gateway 层控制，不是 OS 级隔离。源码证据：`frameworks/openclaw/src/agents/bash-tools.exec-host-gateway.ts:95`、`frameworks/openclaw/src/agents/bash-tools.exec-host-gateway.ts:173`、`frameworks/openclaw/src/infra/exec-approvals.ts:169`。
-- exec runtime 会为 sandbox 走 Docker exec，为 host 走 shell；host env 会过滤 `PATH` 等危险覆盖，但命令本身仍在 host 侧执行。源码证据：`frameworks/openclaw/src/agents/bash-tools.exec.ts:1536`、`frameworks/openclaw/src/agents/bash-tools.exec-runtime.ts:681`、`frameworks/openclaw/src/agents/bash-tools.exec-runtime.ts:708`。
+- `src/agents/skills/workspace.ts:268,533,561,579,645,814,910` —— 发现 / precedence / prompt / snapshot
+- `src/agents/skills/local-loader.ts:21,44` —— SKILL.md / frontmatter
+- `src/agents/skills/config.ts:26,58,73` —— entries config
+- `src/agents/skills/frontmatter.ts:93,112` —— install spec
+- `src/agents/skills-install.ts:457,503,549` —— install 动作
+- `src/agents/skills-install-download.ts:31` —— download root guard
+- `src/agents/skills/tools-dir.ts:7` —— per-skill tools root
+- `src/agents/skills/env-overrides.ts:24,37,83` —— env override
+- `src/agents/skills-clawhub.ts:18,122,144` —— ClawHub install
+- `src/cli/skills-cli.ts:52,93` —— CLI
 
-### 工具权限与并发 agent
+### Plugins
 
-- Gateway RPC 根据 method 的 role/scope 授权；agent handler 还根据 sender owner 控制 model override。源码证据：`frameworks/openclaw/src/gateway/server-methods.ts:110`、`frameworks/openclaw/src/gateway/server-methods/agent.ts:442`。
-- Tool policy 有 owner-only tool guard、非 owner filter、subagent deny list、leaf session deny list。源码证据：`frameworks/openclaw/src/agents/tool-policy.ts:22`、`frameworks/openclaw/src/agents/tool-policy.ts:54`、`frameworks/openclaw/src/agents/pi-tools.policy.ts:34`、`frameworks/openclaw/src/agents/pi-tools.policy.ts:49`。
-- Embedded runner 通过 per-session/global lane 排队；session 写入有 write lock；process registry 的 scopeKey 使用 sessionKey 或 agent id 限制进程可见性。源码证据：`frameworks/openclaw/src/agents/pi-embedded-runner/run.ts:253`、`frameworks/openclaw/src/agents/pi-embedded-runner/run/attempt.ts:636`、`frameworks/openclaw/src/agents/pi-tools.ts:400`。
-- 并发隔离因此主要是逻辑隔离：session queue、write lock、scopeKey、tool policy。没有证据显示默认每个 agent/task 都被自动放进独立 OS sandbox；sandbox 要配置开启。源码证据：`frameworks/openclaw/src/agents/sandbox/config.ts:220`、`frameworks/openclaw/src/agents/sandbox/runtime-status.ts:16`。
+- `src/plugins/roots.ts:16,29` —— bundle / global / workspace / config roots
+- `src/plugins/manifest-registry.ts:91` —— manifest precedence
+- `src/plugins/loader.ts:2131,2311,2603,2635,2788,3148` —— 发现 / activate / runtime registry / bundle MCP warn
+- `src/plugins/registry.ts:372,404,1438` —— 可注册 tool / hook / provider / gateway method
+- `src/plugins/install.ts:39,769`、`src/cli/plugins-cli.ts:760` —— 安装 / security override
+- `src/plugins/installed-plugin-index-store-path.ts:4,20` —— install index
+- `src/plugins/memory-state.ts:159,202` —— 进程级 memory state
 
-## Skill 安装与加载
+### MCP
 
-### Skill 发现与 prompt 加载
+- `src/config/types.mcp.ts:1,9` —— 配置
+- `src/config/mcp-config.ts:29,59,105` —— CRUD
+- `src/agents/bundle-mcp-config.ts:49` —— bundle 合并
+- `src/agents/mcp-transport-config.ts:95` —— transport 解析
+- `src/agents/mcp-stdio.ts:14`、`src/agents/mcp-stdio-transport.ts:27` —— stdio spawn
+- `src/agents/mcp-http.ts:19` —— http
+- `src/agents/pi-bundle-mcp-runtime.ts:181,228,351,483,580` —— runtime
+- `src/agents/pi-bundle-mcp-materialize.ts:64` —— tools materialize
+- `src/mcp/openclaw-tools-serve.ts:2`、`src/mcp/plugin-tools-serve.ts:2`、`src/mcp/plugin-tools-handlers.ts:21,53`、`src/mcp/tools-stdio-server.ts:9,24` —— OpenClaw 作为 MCP server
 
-- Skill loader 支持多个来源：managed `CONFIG_DIR/skills`、workspace `skills`、bundled、extraDirs、plugin skills、personal `~/.agents/skills`、project `<workspace>/.agents/skills`。源码证据：`frameworks/openclaw/src/agents/skills/workspace.ts:533`、`frameworks/openclaw/src/agents/skills/workspace.ts:561`。
-- Precedence 是 extra < bundled < managed < personal < project < workspace。源码证据：`frameworks/openclaw/src/agents/skills/workspace.ts:579`。
-- 单个 skill 必须有 `SKILL.md`，并通过 frontmatter 提供 name/description；loader 会限制 symlink、路径逃逸和最大文件大小。源码证据：`frameworks/openclaw/src/agents/skills/local-loader.ts:21`、`frameworks/openclaw/src/agents/skills/local-loader.ts:44`、`frameworks/openclaw/src/agents/skills/workspace.ts:268`。
-- `skills.entries` 配置控制启用、bundled/runtime eligibility 等。源码证据：`frameworks/openclaw/src/agents/skills/config.ts:26`、`frameworks/openclaw/src/agents/skills/config.ts:58`、`frameworks/openclaw/src/agents/skills/config.ts:73`。
-- Skill prompt 只把紧凑清单注入 system prompt，并指示模型在匹配任务时读取 `SKILL.md`，相对路径按 skill directory 解析。源码证据：`frameworks/openclaw/src/agents/skills/workspace.ts:645`。
-- New/stale session 会保存 skill snapshot，后续可优先使用 session snapshot。源码证据：`frameworks/openclaw/src/agents/agent-command.ts:591`、`frameworks/openclaw/src/agents/skills/workspace.ts:814`。
-- sandbox workspace 会同步 filtered skill files 到 sandbox 目标目录，过滤 `.git`、`node_modules` 等。源码证据：`frameworks/openclaw/src/agents/skills/workspace.ts:910`。
+### 状态与存储
 
-### Skill 安装
+- `src/config/paths.ts:55,101,227` —— state dir / config / oauth
+- `src/utils.ts:130` —— config dir 解析
+- `src/agents/agent-paths.ts:6` —— agent dir
+- `src/config/sessions/paths.ts:10,35,62,176,240` —— session store 路径
+- `src/config/sessions/store.ts:232,411,493` —— atomic write / rotate
+- `src/config/sessions/transcript.ts:19` —— transcript header
+- `src/agents/auth-profiles/path-resolve.ts:12`、`src/agents/auth-profiles/store.ts:73,197`、`src/agents/auth-profiles/persisted.ts:95` —— auth
+- `src/memory/root-memory-files.ts:4,33` —— MEMORY.md canonical
+- `src/memory-host-sdk/host/backend-config.ts:329,350` —— memory backend
+- `src/memory-host-sdk/events.ts:5` —— event log
+- `src/logging/logger.ts:42,336,401,474` —— logger
+- `src/infra/tmp-openclaw-dir.ts:5,33,75` —— tmp dir 安全性
+- `src/agents/cache-trace.ts:81`、`src/agents/bootstrap-cache.ts:3`、`src/agents/pi-embedded-runner/openrouter-model-capabilities.ts:1,82,120` —— 缓存
 
-- `openclaw skills` CLI 支持 search/install/update/list/info/check；install 从 ClawHub slug 安装到 active workspace。源码证据：`frameworks/openclaw/src/cli/skills-cli.ts:52`、`frameworks/openclaw/src/cli/skills-cli.ts:93`。
-- ClawHub 安装目标是 `<workspace>/skills/<slug>`，使用 `.clawhub` origin/lock 文件跟踪。源码证据：`frameworks/openclaw/src/agents/skills-clawhub.ts:18`、`frameworks/openclaw/src/agents/skills-clawhub.ts:122`、`frameworks/openclaw/src/agents/skills-clawhub.ts:144`。
-- Skill frontmatter 支持 `install` spec，包括 brew/node/go/uv/download；download URL 仅接受 http/https。源码证据：`frameworks/openclaw/src/agents/skills/frontmatter.ts:93`、`frameworks/openclaw/src/agents/skills/frontmatter.ts:112`。
-- `installSkill` 会解析 skill、扫描 install source、提示 untrusted、下载依赖、构造并执行安装命令。源码证据：`frameworks/openclaw/src/agents/skills-install.ts:457`、`frameworks/openclaw/src/agents/skills-install.ts:503`、`frameworks/openclaw/src/agents/skills-install.ts:549`。
-- Download 型安装默认落在 per-skill tools root，且拒绝写到 root 外。源码证据：`frameworks/openclaw/src/agents/skills/tools-dir.ts:7`、`frameworks/openclaw/src/agents/skills-install-download.ts:31`。
-- Skill env override 是进程级环境变量注入，带 acquire/release reverter，并屏蔽一组危险变量。源码证据：`frameworks/openclaw/src/agents/skills/env-overrides.ts:24`、`frameworks/openclaw/src/agents/skills/env-overrides.ts:37`、`frameworks/openclaw/src/agents/skills/env-overrides.ts:83`。
+### Tool policy
 
-### 插件与工具 registry
-
-- Plugin roots 包括 bundled stock、global `<configDir>/extensions`、workspace `<workspace>/.openclaw/extensions`，也可以从 config 加载额外路径。源码证据：`frameworks/openclaw/src/plugins/roots.ts:16`、`frameworks/openclaw/src/plugins/roots.ts:29`。
-- Manifest registry origin precedence 是 config > workspace > global > bundled。源码证据：`frameworks/openclaw/src/plugins/manifest-registry.ts:91`。
-- Plugin loader 会发现 manifest、计算 enable/startup/compat、加载 setup/runtime entry，并激活 runtime registry。源码证据：`frameworks/openclaw/src/plugins/loader.ts:2311`、`frameworks/openclaw/src/plugins/loader.ts:2788`、`frameworks/openclaw/src/plugins/loader.ts:2131`。
-- Plugin API 可以注册 tool、hook、provider、agent harness、detached task runtime、gateway method、media/web/search 能力等。源码证据：`frameworks/openclaw/src/plugins/registry.ts:372`、`frameworks/openclaw/src/plugins/registry.ts:404`、`frameworks/openclaw/src/plugins/registry.ts:1438`。
-- Plugin install 支持 archive/package，安装前有 security scan，并可通过 `--dangerously-force-unsafe-install` 覆盖部分安全拦截。源码证据：`frameworks/openclaw/src/plugins/install.ts:39`、`frameworks/openclaw/src/plugins/install.ts:769`、`frameworks/openclaw/src/cli/plugins-cli.ts:760`。
-- Plugin install index 持久化在 state dir 下 `plugins/installs.json`。源码证据：`frameworks/openclaw/src/plugins/installed-plugin-index-store-path.ts:4`、`frameworks/openclaw/src/plugins/installed-plugin-index-store-path.ts:20`。
-
-## MCP 安装与加载
-
-### MCP 客户端侧
-
-- Config 模型支持 `mcp.servers`；每个 server 可配置 stdio `command/args/env/cwd` 或 http `url/transport/headers`。源码证据：`frameworks/openclaw/src/config/types.mcp.ts:1`、`frameworks/openclaw/src/config/types.mcp.ts:9`。
-- MCP config CLI/manager 支持 list/set/unset configured servers。源码证据：`frameworks/openclaw/src/config/mcp-config.ts:29`、`frameworks/openclaw/src/config/mcp-config.ts:59`、`frameworks/openclaw/src/config/mcp-config.ts:105`。
-- Agent run 会把 configured MCP 与 bundle MCP 默认配置合并，configured server 覆盖 bundle 默认值。源码证据：`frameworks/openclaw/src/agents/bundle-mcp-config.ts:49`。
-- Transport 解析优先 stdio，然后 http/sse/streamable-http；unsupported transport 会产生 warning。源码证据：`frameworks/openclaw/src/agents/mcp-transport-config.ts:95`。
-- Stdio MCP 会 spawn 配置中的 command，使用给定 args/env/cwd。源码证据：`frameworks/openclaw/src/agents/mcp-stdio.ts:14`、`frameworks/openclaw/src/agents/mcp-stdio-transport.ts:27`。
-- HTTP MCP 接受 http/https URL 和 headers。源码证据：`frameworks/openclaw/src/agents/mcp-http.ts:19`。
-- Session MCP runtime 按 server 遍历连接，`listTools` 后生成 catalog；tool 调用时通过 MCP client `callTool`。源码证据：`frameworks/openclaw/src/agents/pi-bundle-mcp-runtime.ts:181`、`frameworks/openclaw/src/agents/pi-bundle-mcp-runtime.ts:228`、`frameworks/openclaw/src/agents/pi-bundle-mcp-runtime.ts:351`。
-- MCP runtime manager 按 session/config fingerprint 复用 runtime，并有 idle TTL、dispose/retire 生命周期。源码证据：`frameworks/openclaw/src/agents/pi-bundle-mcp-runtime.ts:483`、`frameworks/openclaw/src/agents/pi-bundle-mcp-runtime.ts:580`。
-- MCP catalog tools 在 agent attempt 中被 materialize 成 agent tools，并进入同一套 tool policy 过滤。源码证据：`frameworks/openclaw/src/agents/pi-bundle-mcp-materialize.ts:64`、`frameworks/openclaw/src/agents/pi-embedded-runner/run/attempt.ts:854`、`frameworks/openclaw/src/agents/pi-embedded-runner/run/attempt.ts:905`。
-
-### MCP 服务端侧
-
-- OpenClaw 可以作为 stdio MCP server 暴露 selected built-in tools。源码证据：`frameworks/openclaw/src/mcp/openclaw-tools-serve.ts:2`。
-- OpenClaw 也可以作为 stdio MCP server 暴露 plugin-registered tools；handler 会过滤 `ownerOnly` tool，并以 `mcp-${Date.now()}` 作为执行 id 调用工具。源码证据：`frameworks/openclaw/src/mcp/plugin-tools-serve.ts:2`、`frameworks/openclaw/src/mcp/plugin-tools-handlers.ts:21`、`frameworks/openclaw/src/mcp/plugin-tools-handlers.ts:53`。
-- MCP stdio server stdout 只用于协议输出。源码证据：`frameworks/openclaw/src/mcp/tools-stdio-server.ts:9`、`frameworks/openclaw/src/mcp/tools-stdio-server.ts:24`。
-
-### Bundle/plugin MCP
-
-- Plugin bundle capability 包含 `skills`、`mcpServers`、settings、commands、agents、outputStyles、lspServers、hooks 等。源码证据：`frameworks/openclaw/src/plugins/loader.ts:2603`。
-- Loader 对 bundle MCP runtime support 做检查，并对 unsupported/incomplete configs 产生 diagnostics；源码信息显示 bundle MCP runtime 仍偏向 stdio 支持。源码证据：`frameworks/openclaw/src/plugins/loader.ts:2635`。
-
-## 记忆与状态存储
-
-### 状态与配置根目录
-
-- `resolveStateDir` 用于 sessions/logs/caches 等可变状态；优先 `OPENCLAW_STATE_DIR`，默认 `~/.openclaw`，兼容 legacy `.clawdbot`。源码证据：`frameworks/openclaw/src/config/paths.ts:55`。
-- Canonical config path 默认是 `<stateDir>/openclaw.json`，可被 `OPENCLAW_CONFIG_PATH` 覆盖。源码证据：`frameworks/openclaw/src/config/paths.ts:101`。
-- `resolveConfigDir` 也会受 `OPENCLAW_STATE_DIR` 和 `OPENCLAW_CONFIG_PATH` 影响，默认 `~/.openclaw`。源码证据：`frameworks/openclaw/src/utils.ts:130`。
-- Agent dir 默认是 `<stateDir>/agents/main/agent`，可由 `OPENCLAW_AGENT_DIR` 或 `PI_CODING_AGENT_DIR` 覆盖。源码证据：`frameworks/openclaw/src/agents/agent-paths.ts:6`。
-
-### 会话、转录与认证
-
-- Session store 默认在 `<stateDir>/agents/<agentId>/sessions/sessions.json`，session transcript 在同一 sessions 目录下。源码证据：`frameworks/openclaw/src/config/sessions/paths.ts:10`、`frameworks/openclaw/src/config/sessions/paths.ts:35`、`frameworks/openclaw/src/config/sessions/paths.ts:240`。
-- Session file 解析有 safe id regex 和 within-dir 检查，并保留兼容路径处理。源码证据：`frameworks/openclaw/src/config/sessions/paths.ts:62`、`frameworks/openclaw/src/config/sessions/paths.ts:176`。
-- Session store 写入会在 file lock 下更新，并用 atomic write、0600 mode 持久化；还包括 prune/cap/disk budget/archive/rotate 维护。源码证据：`frameworks/openclaw/src/config/sessions/store.ts:232`、`frameworks/openclaw/src/config/sessions/store.ts:411`、`frameworks/openclaw/src/config/sessions/store.ts:493`。
-- Transcript header 记录 session version、cwd、创建时间等，写入模式是 0600。源码证据：`frameworks/openclaw/src/config/sessions/transcript.ts:19`。
-- Auth profile/state 文件在 agentDir 下；OAuth credentials 默认在 `<stateDir>/credentials/oauth.json`。源码证据：`frameworks/openclaw/src/agents/auth-profiles/path-resolve.ts:12`、`frameworks/openclaw/src/config/paths.ts:227`。
-- Auth store 有进程级 cache，按路径和 mtime 复用。源码证据：`frameworks/openclaw/src/agents/auth-profiles/store.ts:73`、`frameworks/openclaw/src/agents/auth-profiles/store.ts:197`。
-- Persisted auth 会把 secret-backed field 规范化为 refs，并移除 raw value。源码证据：`frameworks/openclaw/src/agents/auth-profiles/persisted.ts:95`。
-
-### 记忆
-
-- Workspace root memory 文件是 `MEMORY.md`，legacy `memory.md` 和 repair auxiliary 有特殊处理；canonical file 必须是真实文件且不是 symlink。源码证据：`frameworks/openclaw/src/memory/root-memory-files.ts:4`、`frameworks/openclaw/src/memory/root-memory-files.ts:33`。
-- 默认 QMD memory collections 来自 `<workspace>/MEMORY.md` 和 `<workspace>/memory/**/*.md`。源码证据：`frameworks/openclaw/src/memory-host-sdk/host/backend-config.ts:329`。
-- Memory backend config 可从 agent workspace、config extra paths/collections、sessions 组合。源码证据：`frameworks/openclaw/src/memory-host-sdk/host/backend-config.ts:350`。
-- Memory event log 默认相对 workspace 路径是 `memory/.dreams/events.jsonl`。源码证据：`frameworks/openclaw/src/memory-host-sdk/events.ts:5`。
-- Memory plugin state 是进程级全局对象，注册 corpus/capability 并持有 memory search managers。源码证据：`frameworks/openclaw/src/plugins/memory-state.ts:159`、`frameworks/openclaw/src/plugins/memory-state.ts:202`。
-
-### 日志、临时文件、缓存与插件状态
-
-- 默认日志目录是 OpenClaw preferred tmp dir，默认文件 `openclaw.log`；可由 config/env 覆盖，支持 rotate/prune/redact，logger 本身是进程级 cache。源码证据：`frameworks/openclaw/src/logging/logger.ts:42`、`frameworks/openclaw/src/logging/logger.ts:336`、`frameworks/openclaw/src/logging/logger.ts:401`、`frameworks/openclaw/src/logging/logger.ts:474`。
-- Preferred tmp dir 优先 `/tmp/openclaw`，否则按 uid 创建 secure fallback，并要求非 symlink、user-owned、非 group-writable、0700。源码证据：`frameworks/openclaw/src/infra/tmp-openclaw-dir.ts:5`、`frameworks/openclaw/src/infra/tmp-openclaw-dir.ts:33`、`frameworks/openclaw/src/infra/tmp-openclaw-dir.ts:75`。
-- Cache trace 是 opt-in，默认写 `<stateDir>/logs/cache-trace.jsonl`，writer map 是进程级。源码证据：`frameworks/openclaw/src/agents/cache-trace.ts:81`。
-- Bootstrap snapshot cache 是进程内 map，按 sessionKey 维护。源码证据：`frameworks/openclaw/src/agents/bootstrap-cache.ts:3`。
-- OpenRouter model capability cache 有内存层和 `<stateDir>/cache/openrouter-models.json` 磁盘层。源码证据：`frameworks/openclaw/src/agents/pi-embedded-runner/openrouter-model-capabilities.ts:1`、`frameworks/openclaw/src/agents/pi-embedded-runner/openrouter-model-capabilities.ts:82`、`frameworks/openclaw/src/agents/pi-embedded-runner/openrouter-model-capabilities.ts:120`。
-- Plugin install index 默认 `<stateDir>/plugins/installs.json`，plugin loader 会缓存并激活 runtime registry。源码证据：`frameworks/openclaw/src/plugins/installed-plugin-index-store-path.ts:4`、`frameworks/openclaw/src/plugins/installed-plugin-index-store-path.ts:20`、`frameworks/openclaw/src/plugins/loader.ts:3148`。
-
-## 数据边界矩阵
-
-| 数据/能力 | 默认位置或边界 | OpenClaw 自身约束 | 对 AVM 边界的事实含义 |
-| --- | --- | --- | --- |
-| CLI 入口 | `openclaw.mjs` -> `dist/entry` | 未构建源码树无法直接 help | AVM adapter 需要处理源码树和发布包差异；证据：`frameworks/openclaw/openclaw.mjs:191` |
-| Config | `<stateDir>/openclaw.json` | 可被 env 覆盖 | AVM 需要注入 per-VM state/config env；证据：`frameworks/openclaw/src/config/paths.ts:101` |
-| Workspace | 默认 `~/.openclaw/workspace` | 部分读文件有 boundary open；显式 workspace 可指定 | AVM 不能只依赖默认 workspace；证据：`frameworks/openclaw/src/agents/workspace-default.ts:6`、`frameworks/openclaw/src/agents/workspace-run.ts:74` |
-| Agent 目录 | `<stateDir>/agents/main/agent` | 可 env 覆盖 | Adapter 需要显式绑定 agentDir；证据：`frameworks/openclaw/src/agents/agent-paths.ts:6` |
-| Sessions | `<stateDir>/agents/<agentId>/sessions` | safe id、lock、atomic write | 可由 runtime adapter 托管/迁移；证据：`frameworks/openclaw/src/config/sessions/paths.ts:10` |
-| Transcript | session 目录 JSONL | 0600 mode、session file 解析 | 需要纳入 VM 生命周期清理；证据：`frameworks/openclaw/src/config/sessions/transcript.ts:19` |
-| Auth | agentDir auth files + `<stateDir>/credentials/oauth.json` | secret refs；进程 cache | 需要 per-VM credentials/state 隔离；证据：`frameworks/openclaw/src/config/paths.ts:227` |
-| 文件工具 | host path 或 workspace guard | `workspaceOnly` 默认 false | AVM runtime 需要统一兜底文件边界；证据：`frameworks/openclaw/src/agents/tool-fs-policy.ts:11` |
-| Shell 执行 | host/gateway 或 sandbox | sandbox 默认 off；approval 默认 off | AVM 不能默认信任 OpenClaw exec policy；证据：`frameworks/openclaw/src/agents/sandbox/config.ts:220`、`frameworks/openclaw/src/agents/exec-defaults.ts:124` |
-| Docker sandbox | Docker container | 强约束在启用后生效 | AVM 可调用但不能假定默认启用；证据：`frameworks/openclaw/src/agents/sandbox/docker.ts:391` |
-| Skills | bundled/global/personal/project/workspace/plugin | 文件 loader 有路径/大小防护；install 可执行包管理命令 | Adapter 需要控制 skill roots/install；证据：`frameworks/openclaw/src/agents/skills/workspace.ts:533`、`frameworks/openclaw/src/agents/skills-install.ts:457` |
-| Plugins | bundled/global/workspace/config roots | runtime registry 进程级激活 | Adapter 需要控制 plugin roots和启用列表；证据：`frameworks/openclaw/src/plugins/roots.ts:16`、`frameworks/openclaw/src/plugins/loader.ts:2131` |
-| MCP client | config/bundle servers | stdio 可 spawn command；HTTP 可带 headers | AVM 需要 MCP allowlist/credentials/env 策略；证据：`frameworks/openclaw/src/agents/mcp-stdio-transport.ts:27` |
-| MCP server | stdio 暴露 OpenClaw/plugin tools | plugin tools 会过滤 ownerOnly | 作为外部 tool provider 时需审计可暴露工具；证据：`frameworks/openclaw/src/mcp/plugin-tools-handlers.ts:21` |
-| Memory 文件 | workspace `MEMORY.md`/`memory/**/*.md` | canonical memory file 拒绝 symlink | workspace 内存较好隔离，但 extra paths/config 可扩展边界；证据：`frameworks/openclaw/src/memory-host-sdk/host/backend-config.ts:350` |
-| Logs/tmp/cache | tmp dir + state logs/cache | tmp dir 做安全检查；logger/cache 是进程级 | VM 生命周期需清理 tmp/state；证据：`frameworks/openclaw/src/infra/tmp-openclaw-dir.ts:75` |
-
-## 证据表
-
-| 结论 | 源码证据 |
-| --- | --- |
-| CLI bin 是 `openclaw.mjs` | `frameworks/openclaw/package.json:16` |
-| 入口要求 Node >= 22.12 | `frameworks/openclaw/openclaw.mjs:8` |
-| 未构建源码树缺少 dist 会失败 | `frameworks/openclaw/openclaw.mjs:191`、`frameworks/openclaw/openclaw.mjs:197` |
-| `agent` 默认 Gateway，`--local` embedded | `frameworks/openclaw/src/cli/program/register.agent.ts:26`、`frameworks/openclaw/src/commands/agent-via-gateway.ts:189` |
-| Gateway agent handler 负责 auth/session/workspace/dispatch | `frameworks/openclaw/src/gateway/server-methods/agent.ts:387`、`frameworks/openclaw/src/gateway/server-methods/agent.ts:1140` |
-| Embedded attempt 构造 Pi agent session 并 prompt | `frameworks/openclaw/src/agents/pi-embedded-runner/run/attempt.ts:1380`、`frameworks/openclaw/src/agents/pi-embedded-runner/run/attempt.ts:2637` |
-| Workspace 默认在 `~/.openclaw/workspace` | `frameworks/openclaw/src/agents/workspace-default.ts:6` |
-| `workspaceOnly` 默认 false | `frameworks/openclaw/src/agents/tool-fs-policy.ts:11` |
-| Host write/edit 可在非 workspaceOnly 时写任意 host path | `frameworks/openclaw/src/agents/pi-tools.read.ts:757` |
-| Sandbox 默认 off | `frameworks/openclaw/src/agents/sandbox/config.ts:220` |
-| Docker sandbox 启用后有 read-only root/network none/cap drop | `frameworks/openclaw/src/agents/sandbox/docker.ts:391` |
-| Exec 默认 host auto/security/approval 行为是配置驱动 | `frameworks/openclaw/src/agents/exec-defaults.ts:43`、`frameworks/openclaw/src/agents/exec-defaults.ts:91`、`frameworks/openclaw/src/agents/exec-defaults.ts:124` |
-| Tool policy 区分 owner/non-owner/subagent | `frameworks/openclaw/src/agents/tool-policy.ts:22`、`frameworks/openclaw/src/agents/pi-tools.policy.ts:34` |
-| Skills 多 root 发现并按 precedence 合并 | `frameworks/openclaw/src/agents/skills/workspace.ts:533`、`frameworks/openclaw/src/agents/skills/workspace.ts:579` |
-| Skill install 可执行 package/download recipes | `frameworks/openclaw/src/agents/skills/frontmatter.ts:112`、`frameworks/openclaw/src/agents/skills-install.ts:457` |
-| Plugins 可注册工具/hook/provider/gateway method | `frameworks/openclaw/src/plugins/registry.ts:372`、`frameworks/openclaw/src/plugins/registry.ts:1438` |
-| Plugin roots 包含 global/workspace/bundled/config | `frameworks/openclaw/src/plugins/roots.ts:16`、`frameworks/openclaw/src/plugins/roots.ts:29` |
-| MCP config 支持 stdio/http server | `frameworks/openclaw/src/config/types.mcp.ts:1` |
-| MCP stdio 会 spawn configured command | `frameworks/openclaw/src/agents/mcp-stdio-transport.ts:27` |
-| MCP tools materialize 成 agent tools | `frameworks/openclaw/src/agents/pi-bundle-mcp-materialize.ts:64` |
-| OpenClaw 可作为 MCP stdio server 暴露 built-in/plugin tools | `frameworks/openclaw/src/mcp/openclaw-tools-serve.ts:2`、`frameworks/openclaw/src/mcp/plugin-tools-serve.ts:2` |
-| State dir 默认 `~/.openclaw` | `frameworks/openclaw/src/config/paths.ts:55` |
-| Session store/transcript 在 per-agent sessions dir | `frameworks/openclaw/src/config/sessions/paths.ts:10`、`frameworks/openclaw/src/config/sessions/paths.ts:240` |
-| OAuth credentials 默认 state credentials | `frameworks/openclaw/src/config/paths.ts:227` |
-| Workspace memory 默认 `MEMORY.md`/`memory/**/*.md` | `frameworks/openclaw/src/memory/root-memory-files.ts:4`、`frameworks/openclaw/src/memory-host-sdk/host/backend-config.ts:329` |
-| Plugin/memory/auth/cache 存在进程级状态 | `frameworks/openclaw/src/plugins/loader.ts:3148`、`frameworks/openclaw/src/plugins/memory-state.ts:202`、`frameworks/openclaw/src/agents/auth-profiles/store.ts:73`、`frameworks/openclaw/src/agents/bootstrap-cache.ts:3` |
-
-## AVM PRD 风险
-
-这些不是产品建议，而是 PRD 需要承认或验证的源码事实。
-
-1. AVM 不能把 OpenClaw 默认 workspace 当作隔离边界。默认 workspace 在用户 home 的 `~/.openclaw/workspace`，并且 host file tools 默认不是 workspace-only。证据：`frameworks/openclaw/src/agents/workspace-default.ts:6`、`frameworks/openclaw/src/agents/tool-fs-policy.ts:11`、`frameworks/openclaw/src/agents/pi-tools.read.ts:757`。
-2. AVM 不能依赖 OpenClaw 默认 sandbox 实现隔离。sandbox 默认 off；只有显式配置后 Docker sandbox 的安全属性才生效。证据：`frameworks/openclaw/src/agents/sandbox/config.ts:220`、`frameworks/openclaw/src/agents/sandbox/docker.ts:391`。
-3. AVM 不能默认允许 OpenClaw host exec。没有 sandbox 时 exec 会走 host/gateway，approval 默认 off，安全策略是配置驱动。证据：`frameworks/openclaw/src/agents/exec-defaults.ts:91`、`frameworks/openclaw/src/agents/exec-defaults.ts:124`、`frameworks/openclaw/src/agents/bash-tools.exec-runtime.ts:708`。
-4. Skill 安装、plugin 安装、MCP stdio 都可能执行 host command 或加载进程内代码。证据：`frameworks/openclaw/src/agents/skills-install.ts:457`、`frameworks/openclaw/src/plugins/loader.ts:2788`、`frameworks/openclaw/src/agents/mcp-stdio-transport.ts:27`。
-5. OpenClaw 有多个全局或 state-dir 级数据面：auth store cache、plugin registry、memory plugin state、bootstrap cache、OpenRouter cache、plugin install index。证据：`frameworks/openclaw/src/agents/auth-profiles/store.ts:73`、`frameworks/openclaw/src/plugins/memory-state.ts:202`、`frameworks/openclaw/src/agents/bootstrap-cache.ts:3`、`frameworks/openclaw/src/plugins/installed-plugin-index-store-path.ts:4`。
-6. AVM adapter 需要抽象的行为边界包括：CLI/Gateway/local invocation、state/config/agentDir/workspace env injection、model/auth profile mapping、session store/transcript mapping、tool policy mapping、sandbox/exec backend mapping、skills/plugins/MCP roots 与 install/loading 生命周期。证据分别见 `frameworks/openclaw/src/commands/agent-via-gateway.ts:189`、`frameworks/openclaw/src/config/paths.ts:55`、`frameworks/openclaw/src/agents/agent-command.ts:679`、`frameworks/openclaw/src/config/sessions/paths.ts:10`、`frameworks/openclaw/src/agents/pi-tools.ts:673`、`frameworks/openclaw/src/agents/sandbox/config.ts:220`、`frameworks/openclaw/src/agents/skills/workspace.ts:533`。
-7. AVM runtime 层需要统一兜底的行为包括：per-VM HOME/state/config/agentDir/workspace、host fs deny-by-default、host exec deny-by-default、MCP stdio allowlist、plugin/skill install gate、tmp/cache/log cleanup。源码原因是这些能力在 OpenClaw 里分散在 config、tools、sandbox、plugins、skills、MCP，而非一个统一强制边界。证据：`frameworks/openclaw/src/config/paths.ts:55`、`frameworks/openclaw/src/agents/tool-fs-policy.ts:11`、`frameworks/openclaw/src/agents/exec-defaults.ts:91`、`frameworks/openclaw/src/plugins/roots.ts:16`、`frameworks/openclaw/src/agents/mcp-stdio-transport.ts:27`。
-8. 不能依赖 OpenClaw 自身实现的隔离能力包括：默认 OS sandbox、默认 workspace-only 文件访问、默认禁止 host shell、默认禁止 personal/global skills、默认禁止 workspace/global plugins、默认禁止 MCP stdio spawn。证据：`frameworks/openclaw/src/agents/sandbox/config.ts:220`、`frameworks/openclaw/src/agents/tool-fs-policy.ts:11`、`frameworks/openclaw/src/agents/exec-defaults.ts:124`、`frameworks/openclaw/src/agents/skills/workspace.ts:561`、`frameworks/openclaw/src/plugins/roots.ts:16`、`frameworks/openclaw/src/agents/mcp-stdio-transport.ts:27`。
-
-## 未决问题
-
-1. 当前 PRD 是否要求 AVM 在 OpenClaw runtime 内使用 Gateway 作为常驻服务，还是每个 VM/task 使用 `--local` 短进程？源码支持两条路径，但 session 生命周期、auth surface 和并发模型不同。证据：`frameworks/openclaw/src/commands/agent-via-gateway.ts:189`、`frameworks/openclaw/src/gateway/server-methods/agent.ts:1054`。
-2. AVM 是否允许 OpenClaw 使用 Docker sandbox，还是必须由 AVM 自己提供外层 sandbox？源码显示 OpenClaw Docker sandbox 可以加强隔离，但默认 off 且由 OpenClaw config 驱动。证据：`frameworks/openclaw/src/agents/sandbox/config.ts:220`、`frameworks/openclaw/src/agents/sandbox/docker.ts:391`。
-3. AVM 是否要支持 OpenClaw skills/plugins/MCP 完整生态，还是只允许预安装白名单？源码显示三者都有 host execution 或 in-process loading surface。证据：`frameworks/openclaw/src/agents/skills-install.ts:457`、`frameworks/openclaw/src/plugins/loader.ts:2788`、`frameworks/openclaw/src/agents/mcp-stdio-transport.ts:27`。
-4. AVM 需要怎样处理已有用户 `~/.openclaw` 数据？源码有 legacy/compat 路径和默认 global state；若 AVM 改用 per-VM state，需要明确迁移或隔离策略。证据：`frameworks/openclaw/src/config/paths.ts:55`、`frameworks/openclaw/src/config/sessions/paths.ts:176`。
+- `src/agents/tool-policy.ts:22,54` —— owner-only / non-owner filter
+- `src/agents/pi-tools.policy.ts:34,49` —— subagent / leaf session deny
