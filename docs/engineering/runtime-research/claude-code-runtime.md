@@ -14,7 +14,7 @@
 
 5. Claude Code 的状态边界**不止 `~/.claude`**。Global config 在 `~/.claude.json`（独立文件，不在 `.claude/` 里），plugin cache 可被 `CLAUDE_CODE_PLUGIN_CACHE_DIR` 改向，env-paths cache 走 XDG，secure storage 在非 macOS 上 fallback 到明文 `~/.claude/.credentials.json`。PRD 想做"AVM home"边界要意识到这是**多目录**而不是单点（`src/utils/env.ts:13`，`src/utils/plugins/pluginDirectories.ts:49`，`src/utils/cachePaths.ts:1`，`src/utils/secureStorage/plainTextStorage.ts:13`）。
 
-6. Claude Code 的**项目身份是 canonical git root**，不是 cwd。Auto-memory、project memory、session 历史都按 canonical path 索引，**worktree 共享 memory**。PRD 想把每个 worktree 当独立 agent，默认会撞车（`src/bootstrap/state.ts:45`、`496`，`src/memdir/paths.ts:198`）。
+6. Claude Code 的**项目身份是 canonical git root**，不是 cwd（`src/bootstrap/state.ts:45`、`496`，`src/memdir/paths.ts:198`-`205`）。这意味着同一个 Claude Code 实例下，多个 worktree 共享 auto-memory——这是 Claude Code 故意的（注释引 `anthropics/claude-code#24382`）。但 auto-memory 的 base 跟着 `CLAUDE_CONFIG_DIR` 走（`paths.ts:85-90` → `envUtils.ts:7-14`），AVM 给每个 agent 独立 `CLAUDE_CONFIG_DIR` 时 memory 自然分家，不冲突。
 
 7. Project-level 配置（`.mcp.json`、`.claude/settings.json`、`headersHelper`、project memory）默认**不可信**：未通过 trust gate 之前，env 变量、MCP server、headersHelper 都被 hold 住。AVM 写 project 层的东西要意识到首次运行需要 user trust（`src/utils/managedEnv.ts:93`、`124`，`src/services/mcp/utils.ts:351`，`src/services/mcp/headersHelper.ts:40`）。
 
@@ -37,9 +37,9 @@
 | **AVM 不能静默覆盖 runtime 全局能力** | Skills loader 按 source 排序、realpath 去重、first-wins，不互删。MCP 不会神奇合并同名 server。AVM 只要不主动改不属于自己的键就安全。 | **可行**。 |
 | **agent/runtime 隔离边界（不含 memory）** | 硬隔离只能靠环境变量切目录：`CLAUDE_CONFIG_DIR` 改 settings 与 global config 根，`CLAUDE_CODE_PLUGIN_CACHE_DIR` 改 plugin cache，`CLAUDE_CODE_TMPDIR` 改临时目录。但有些路径（debug log、secure storage、env-paths cache）不一定都跟着 `CLAUDE_CONFIG_DIR` 走。 | **可行但有坑**。**没有一个总开关**能把所有 Claude Code 状态搬到隔离目录。 |
 | **Package 导入导出** | Claude Code 有 plugin 体系：marketplace + versioned cache + `installed_plugins.json` + per-plugin data dir，plugin 能携带 skills + commands + agents + MCP。语义上比 AVM package 重。 | **有坑**。AVM package 可以不走 plugin 体系自己渲染；要导出成 plugin 则要对齐 `.claude-plugin/plugin.json` schema。 |
-| **Memory 只做隔离不做内容管理** | 三套 memory 同时跑：CLAUDE.md（被动加载）、auto-memory（按 canonical git root 写文件，**worktree 共享**）、agent memory（user/project/local scope）、session memory（forked subagent + post-sampling hook）。auto-memory 默认开，写 `~/.claude/projects/<git-root>/memory/MEMORY.md`。 | **有坑**。"不管 memory" ≠ "memory 不发生"。worktree 共享 auto-memory 这点会让 PRD 的"不同 agent 不串状态"假设失效。 |
+| **Memory 只做隔离不做内容管理** | 三套 memory 同时跑：CLAUDE.md（被动加载）、auto-memory（写 `<base>/projects/<git-root>/memory/MEMORY.md`，base 跟 `CLAUDE_CONFIG_DIR` 走）、agent memory（user/project/local scope）、session memory（forked subagent + post-sampling hook）。auto-memory 默认开。 | **可行**。AVM 给每个 agent 独立 `CLAUDE_CONFIG_DIR` 时 memory base 自动分家，无需额外处理。需注意 auto-memory 总会被启用——"不管 memory" ≠ "memory 不发生"，会有文件落盘。 |
 
-**一句话**：PRD 主线（Agent CRUD + runtime managed config + 全量发现 + runtime mapping）在 Claude Code 上能做。三个主要坑：**隔离粒度不存在单一目录开关**、**worktree 共享 auto-memory**、**project 层配置默认不可信，首次需要 trust**。
+**一句话**：PRD 主线（Agent CRUD + runtime managed config + 全量发现 + runtime mapping）在 Claude Code 上能做。两个主要坑：**隔离粒度不存在单一目录开关**（`CLAUDE_CONFIG_DIR` 是大头，但 plugin cache、tmp、debug log 各有独立 env 变量）、**project 层配置默认不可信，首次需要 trust**。
 
 ---
 
@@ -321,7 +321,7 @@ Claude Code 把 plugin 当 skill / command / agent / MCP 的载体：
 PRD 明说"不管 memory"，这里重点提醒它**不是被动 context**：
 
 - **CLAUDE.md** 是被动加载，AVM 控制内容即可。
-- **Auto-memory** 默认开（除非 bare / remote 无持久化 / 显式禁用），按 canonical git root 索引（`memdir/paths.ts:21`、`198`）。**worktree 共享 auto-memory**——`avm run agent-a` 和 `avm run agent-b` 如果都在同一个 git root 下跑，auto-memory 文件是同一份。
+- **Auto-memory** 默认开（除非 bare / remote 无持久化 / 显式禁用）。最终路径是 `<base>/projects/<sanitized-git-root>/memory/MEMORY.md`，`<base>` 由 `getMemoryBaseDir()` 解析（`memdir/paths.ts:85-90`）：先看 `CLAUDE_CODE_REMOTE_MEMORY_DIR`，否则取 `getClaudeConfigHomeDir()`，即 `CLAUDE_CONFIG_DIR ?? ~/.claude`（`envUtils.ts:7-14`）。git-root 这层只在**单个 Claude Code 实例内部**让多个 worktree 共享 memory（`paths.ts:198-205`，注释引 `anthropics/claude-code#24382`）；AVM 给每个 agent 独立 `CLAUDE_CONFIG_DIR` 时，base 已经分家，不会跨 agent 撞车。
 - **Agent memory** 三 scope（user / project / local），每个 agent type 一个 `MEMORY.md`（`agentMemory.ts:12`、`47`）。
 - **Session memory** 是 forked subagent + post-sampling hook 维护的，每个 session 自动建 mode 0700 目录与 mode 0600 summary 文件（`sessionMemory.ts:80`、`183`、`357`）。
 
@@ -364,9 +364,10 @@ PRD 明说"不管 memory"，这里重点提醒它**不是被动 context**：
 4. **PRD 4.4（运行透明）/ 4.6（隔离）**：Claude Code 的硬隔离要靠多个环境变量（`CLAUDE_CONFIG_DIR` + `CLAUDE_CODE_PLUGIN_CACHE_DIR` + `CLAUDE_CODE_TMPDIR` + `CLAUDE_CODE_DEBUG_LOGS_DIR` + ...）一起设，不是单字段开关。AVM `--runtime` 注入这些 env 是可行的，但 `avm doctor` 里要解释每条都要管。
 
 5. **PRD 4.6（memory）**：
-   - "不管 memory" ≠ "memory 不发生"。auto-memory 默认开，会写 `~/.claude/projects/<git-root>/memory/`。
-   - **worktree 共享 auto-memory**——这条对 PRD 想做的"agent 之间不串状态"是直接冲突的。同 git root 下跑两个不同的 agent，默认看到同一个 MEMORY.md。
-   - 要彻底隔离，要么给每个 agent 一个独立 `CLAUDE_CONFIG_DIR`，要么用 `CLAUDE_COWORK_MEMORY_PATH_OVERRIDE` 把 memory 路径按 agent ID 分；后者更便宜但要测试是否影响其他子系统。
+   - "不管 memory" ≠ "memory 不发生"。auto-memory 默认开，会写 `<CLAUDE_CONFIG_DIR>/projects/<git-root>/memory/MEMORY.md`。AVM 即便不让用户管理 memory 内容，也得知道有文件落盘。
+   - Auto-memory base 跟 `CLAUDE_CONFIG_DIR` 走，所以 PRD 的"按 agent ID 隔离"在 AVM 给每个 agent 独立 home 时**自动成立**，不需要额外动作。
+   - 反例提醒：如果 AVM 让多个 agent 共享同一个 `CLAUDE_CONFIG_DIR`，就会撞车——同 git root 下两个 agent 看到同一份 MEMORY.md。AVM 设计时不要走这条路。
+   - 单 agent 内多 worktree 共享 memory 是 Claude Code 故意设计（`paths.ts:200-205`），AVM 不需要也不应该绕过。
 
 6. **PRD 3.3（Package）**：Claude Code plugin 有 marketplace + versioned cache + manifest，比 AVM package 重。AVM package 想导出成 plugin 要做 schema 翻译；不想碰则自己渲染——直接把 skill 放 user `~/.claude/skills`，MCP 写 user 层 settings 即可。
 
