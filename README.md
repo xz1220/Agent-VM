@@ -26,37 +26,34 @@ users a small set of durable objects:
 
 - **Agent**: a reusable agent profile with instructions, skills, MCP servers,
   and runtime configuration.
-- **Environment**: a future lightweight working context that lists which Agents
-  are available. The current product path uses one default Environment.
+- **Environment**: an internal default context. Users do not create, switch, or
+  manage Environments in the product path.
 - **Package**: a distributable bundle that can install agents and their
   referenced capabilities.
-- **Runtime**: the target tool where an agent becomes active, such as Codex,
+- **Runtime**: the target tool where an agent runs, such as Codex,
   Claude Code, OpenCode, Cline, or Cursor.
 
-In daily use, create or install an Agent, run or switch to that Agent, then
-start Codex, Claude Code, OpenCode, Cline, or Cursor. Skills are configured
-while creating or editing an Agent; AVM handles runtime detection, syncing, and
-managed activation for you.
+In daily use, create or install an Agent, then run that Agent. Skills are
+configured while creating or editing an Agent; AVM handles runtime detection and
+per-run managed config for you.
 
 ## Daily Path
 
 ```bash
 avm create
-avm use backend-coder
-codex
+avm run backend-coder
 ```
 
 The intended path is simple:
 
 1. Install and initialize AVM.
 2. Create an Agent profile with the current preview wizard.
-3. Run an Agent, or use an Agent in the current shell.
-4. Start your runtime when using shell activation.
+3. Run an Agent.
 
 ```text
 Blank/default / existing Package
   -> create Agent
-    -> run or use Agent
+    -> run Agent
       -> runtime-specific managed config
         -> Codex / Claude Code / OpenCode / Cline / Cursor
 ```
@@ -133,45 +130,33 @@ When creating or editing an Agent, the skills and MCP picker should show the
 current full inventory: AVM-managed capabilities plus user-installed
 runtime-global capabilities discovered from supported runtimes.
 
-### 3. Default Environment And Future Environments
+### 3. Default Environment
 
-Environment management is not a core user module in the current product path.
-AVM only needs one default Environment for now.
+Environment management is not a user module in the current product path. AVM
+only keeps one internal default Environment.
 
-If Environment becomes a first-class feature later, it should stay a small layer:
-a named working context that lists which Agents are available. It should not map
-runtimes to Agents, because each Agent already owns its runtime configuration.
+Users should not create, switch, delete, export, or install Environments. An
+Environment does not map runtimes to Agents, because each Agent already owns its
+runtime configuration.
 
-Current preview builds may still expose `avm env` commands. Treat them as
-experimental compatibility surface, not the daily path.
+Packages do not install, export, or carry Environment metadata.
 
-### 4. Use And Activation
+### 4. Run Agent
 
-This is the daily switching surface.
-
-```bash
-avm use backend-coder
-avm status
-avm deactivate
-```
-
-With shell integration installed, `avm use` updates the current shell so runtime
-environment variables such as `CODEX_HOME`, `CLAUDE_CONFIG_DIR`, and
-`OPENCODE_CONFIG_DIR` point to AVM-managed, agent-scoped runtime homes.
-
-OpenCode needs process-scoped data/state variables for full isolation. Use:
+This is the daily execution surface.
 
 ```bash
-avm run opencode
+avm run backend-coder
+avm run backend-coder --runtime codex
 ```
 
-`avm sync` exists in the preview, but it should be treated as an advanced repair
-or debugging command rather than a primary user module.
+`avm run` is command-scoped. It does not create a user-managed long-running
+state and does not require cleanup.
 
 ### 5. Packages
 
 Packages are for distribution and reuse. Users install packages to get Agents
-and referenced capabilities; they do not usually "use" a package directly.
+and referenced capabilities; they do not run a package directly.
 Packages do not install, export, or carry Environment metadata.
 
 Current preview:
@@ -213,17 +198,16 @@ same feature set.
 
 ## Current Preview Gaps
 
-The current CLI already proves the local activation model, but the product
-surface is not finished.
+The product surface is not finished.
 
 | Area | Available today | Gap |
 | --- | --- | --- |
 | Agent | `create`, `list`, `show`, `edit`, `delete`, `rename`, `clone` | richer first-run/package-backed create flow and interactive polish |
-| Environment | partial `env` commands | default-only product path; future semantics should be an Agent set, not runtime mapping |
+| Environment | internal default only | no user-facing Environment module |
 | Install lifecycle | installer, `init`, `shell init` | missing first-class doctor/uninstall commands |
 | Package | list/show/inspect/export/install | install/export naming still split across commands |
 | Skills | `skill list` | should be surfaced primarily inside Agent create/edit |
-| Sync | `sync` | should mostly disappear behind `use`/activation |
+| Sync | `sync` | should disappear behind `run` |
 
 ## Safety Model
 
