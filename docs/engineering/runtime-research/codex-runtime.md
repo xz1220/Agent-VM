@@ -10,7 +10,7 @@
 
 3. Codex **没有统一的 extension registry**。Skills、MCP、plugin、app 各有独立的发现路径和存储位置。PRD 所说的"全量发现"在 Codex 这里是**多源合并**，不是单表查询。
 
-4. Codex 的状态边界是 `CODEX_HOME`（默认 `~/.codex`）。里面同时混了：config、auth、OAuth credentials、history.jsonl、sessions/*.jsonl rollout、SQLite state DB、SQLite logs DB、skills cache、plugins cache、memory artifacts、model cache。PRD 要做 agent/runtime 隔离边界，就要意识到这是个 **胖目录**，不是 portable profile。
+4. Codex 的状态边界是 `CODEX_HOME`（默认 `~/.codex`）。里面同时混了：config、auth、OAuth credentials、history.jsonl、sessions/*.jsonl rollout、SQLite state DB、SQLite logs DB、skills cache、plugins cache、memory artifacts、model cache。PRD 要求的 per-(Agent, runtime) 私有 boundary 在 Codex 上的自然落地就是**每个 Agent 一个独立 `CODEX_HOME`**，配置和运行状态都一起分家。
 
 5. 命令级 approval 是 **per-session 内存缓存**，不持久化；但 sandbox policy、MCP 配置等是 durable。PRD 说"不管 memory 但要隔离运行状态"——这句里的"运行状态"要区分持久的（config/rollout/DB）和短暂的（approval cache）。
 
@@ -31,11 +31,11 @@
 | **Runtime mapping 状态：native / rendered_as_instructions / ignored / unsupported** | instructions、skills、MCP 三类都有 native 字段。sandbox/approval 拆成 5 维，Codex adapter 把这 5 个维度各自当一个 native 字段即可。 | **可行**。四种状态都有地方落。 |
 | **全量发现 skills/MCP（包括 runtime 全局目录里非 AVM 管理的）** | Skills loader 每次都扫全部 root；MCP 也是 config + plugin + skill-dep 的实时合并。AVM 只要在 create/edit 时调用类似的扫描逻辑即可。 | **可行**。 |
 | **AVM 不能静默覆盖 runtime 全局能力** | Codex 的 skill loader 按 scope 排序、不互删；`codex mcp add` 是显式写 global config。AVM 只要不主动改 `${CODEX_HOME}/skills/.system` 或 user config 里不属于它的键，就安全。 | **可行**。 |
-| **agent/runtime 隔离边界（不含 memory）** | 硬隔离只能靠切 `CODEX_HOME`（env var 支持）。切了之后 config、auth、history、rollout、state DB、memory 全部跟着走。 | **可行**。但这是"整个 Codex 实例隔离"，不是"同 Codex 下多 agent 隔离"。 |
+| **agent/runtime 隔离边界（不含 memory）** | 硬隔离只能靠切 `CODEX_HOME`（env var 支持）。切了之后 config、auth、history、rollout、state DB、memory 全部跟着走，正好对应 PRD 要的 per-(Agent, runtime) 私有 boundary。 | **可行**。新 `CODEX_HOME` 要复制一份 user 级 `auth.json` 过去，否则每个 Agent 第一次运行都要重新 `codex login`。 |
 | **Package 导入导出** | Codex plugin 有独立的 marketplace/cache/manifest 三层结构，plugin 能携带 skills + MCP + apps。语义上比 AVM package 更重。 | **有坑**。AVM package 可以不走 Codex plugin 体系，自己渲染；但如果想导出成 Codex 能直接认的 plugin，要对齐 manifest schema。 |
 | **Memory 只做隔离不做内容管理** | Codex memory 是主动子系统：建 `CODEX_HOME/memories` 目录、加入 writable roots、起后台 job 写 DB `stage1_outputs` 和 `raw_memories.md`。不是被动 context。 | **有坑**。"不管 memory"≠"不发生 memory"。AVM 要知道只要用 Codex，memory 子系统就在跑。想不让它跑要显式禁用（feature flag 或 ephemeral session）。 |
 
-**一句话**：PRD 的主线（Agent CRUD + runtime managed config + 全量发现 + runtime mapping）在 Codex 上可以做。两个主要坑：**隔离粒度只到 `CODEX_HOME`**、**memory 不是 opt-in**。
+**一句话**：PRD 的主线（Agent CRUD + runtime managed config + 全量发现 + runtime mapping）在 Codex 上可以做。两个要向用户披露的点：**每个 Agent 一个独立 `CODEX_HOME`，创建时要复制 user 级 `auth.json`**；**memory 子系统会自动写盘**，在独立 `CODEX_HOME` 下不会跨 Agent 串，但仍然会占磁盘并起后台 job。
 
 ---
 
@@ -85,7 +85,7 @@ requirement (代码内置最小约束)
 
 **对 AVM 的含义**：
 - AVM 想写的 managed config 最自然放在用户层（`${CODEX_HOME}/config.toml`）或项目层（`.codex/config.toml`）。
-- 如果想"一个机器上的 AVM 有多个隔离的 Codex 实例"，唯一干净的做法是给每个 AVM agent 一个独立 `CODEX_HOME`。
+- PRD 要的 per-(Agent, runtime) 私有 boundary，直接做法就是给每个 Agent 一个独立 `CODEX_HOME`，env var 支持，AVM 在 `avm run` 时注入。
 
 ---
 
@@ -233,7 +233,7 @@ session 把这三路合并成 effective list，交给 `McpConnectionManager`（`
 | `models_cache.json` | 模型 metadata 缓存 | 默认 TTL 300s |
 | `log/codex-tui.log`、`log/codex-login.log` | 文本日志 | TUI 会话可额外录 JSONL |
 
-**核心事实**：`CODEX_HOME` 是一个胖目录。PRD 想让"不同 agent 运行状态不串"，最干净的做法是为每个 agent 分配一个独立 `CODEX_HOME`。如果共享 `CODEX_HOME`，就要逐项评估哪些能共享（config 分层可以）、哪些需要进程级隔离（history、sessions、state DB 都是全局的）。
+**核心事实**：`CODEX_HOME` 是一个胖目录，里面的 config / history / sessions / state DB / memory 都是全局的。PRD 要的 per-(Agent, runtime) 私有 boundary 因此只能通过"每个 Agent 一个独立 `CODEX_HOME`"来落地：AVM 在 `avm run` 时把 `CODEX_HOME` 指到 Agent 私有目录即可。创建 Agent 时需要把 user 级 `auth.json` 复制过去，避免首次运行要求重新 `codex login`。
 
 ### Memory 子系统特别说明
 
@@ -244,7 +244,7 @@ session 把这三路合并成 effective list，交给 `McpConnectionManager`（`
 - Phase 1 从 state DB 拿 stale thread、生成 memory 存到 `stage1_outputs` table。
 - Phase 2 从 DB 拉数据重建 filesystem artifacts（`raw_memories.md`、`MEMORY.md`、`memory_summary.md` 等），可能 spawn memory consolidation subagent。
 
-对 AVM：想"隔离运行状态"至少要意识到 memory 会往 `${CODEX_HOME}` 写东西；想真正不写，要在 Codex config 里关掉 memory feature flag 或只用 ephemeral session。
+对 AVM：memory 会往 `${CODEX_HOME}/memories` 写文件、起后台 job。在独立 `CODEX_HOME` 方案下这些产物被关在各自 Agent 的边界里，不会跨 Agent 串，PRD "不管 memory 但要隔离运行状态"的诉求天然成立。需要披露给用户的是：磁盘会占用、后台 job 会跑；想完全不写则需在 Codex config 里关掉 memory feature flag 或只用 ephemeral session。
 
 ---
 
@@ -258,11 +258,11 @@ session 把这三路合并成 effective list，交给 `McpConnectionManager`（`
 
 3. **PRD 4.4（运行透明）**：Codex 命令级 approval 不持久化，下次启动就重问一遍。PRD 要展示"哪些 runtime 已就绪"的时候，approval 状态不能缓存到 AVM 侧当成 durable 属性。
 
-4. **PRD 4.6（memory）**："不管 memory" ≠ "memory 不发生"。Codex memory 会自动写盘、占 writable root、起后台 job。要么显式禁用，要么接受它的副作用。
+4. **PRD 4.6（memory）披露项**：在独立 `CODEX_HOME` 方案下 memory 不会跨 Agent 串，PRD 的"不管 memory 但要隔离运行状态"成立。但 memory 子系统仍会自动写盘、占 writable root、起后台 job。这些副作用需要在 Agent 创建时告知用户；想完全不发生 memory，要显式禁用 feature flag 或只用 ephemeral session。
 
 5. **PRD 3.3（Package）**：Codex plugin 语义比 AVM package 丰富（marketplace、版本、原子替换、manifest）。AVM package 导出为 Codex plugin 需要 schema 翻译；导出为"AVM 自己认"的 zip 则可以不碰 plugin 体系。
 
-6. **PRD 3.4（Runtime）隔离粒度**：Codex 的硬隔离边界是 `CODEX_HOME`。想同机共存多个互不干扰的 Codex 状态，唯一方法是每个 agent 一个 `CODEX_HOME`——这会把 config/auth/history/rollout/DB/memory 全部分家，成本不小。
+6. **PRD 3.4（Runtime）auth 分家**：独立 `CODEX_HOME` 方案的副作用是 `auth.json` 也跟着分家。AVM 必须在 Agent 创建时把 user 级 `${HOME}/.codex/auth.json` 复制到 Agent 私有 `CODEX_HOME`，否则用户每个 Agent 第一次运行都要重新 `codex login`。如果 user 侧 auth 后续轮换，AVM 还要考虑是否要同步刷新已有 Agent 的副本。
 
 ---
 
