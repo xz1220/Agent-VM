@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"errors"
 
 	"github.com/xz1220/agent-vm/internal/app/model"
 	"github.com/xz1220/agent-vm/internal/app/service"
@@ -32,12 +31,23 @@ func (f *fakeAgents) Create(ctx context.Context, req model.CreateAgentRequest) (
 	if f.createErr != nil {
 		return nil, f.createErr
 	}
+	// Mirror service-level name validation so CLI tests cover the same
+	// error paths users see (typed *service.Error with a stable Code).
+	probe := &model.Agent{Identity: model.Identity{Name: req.Name}}
+	if err := probe.Validate(); err != nil {
+		code := service.CodeAgentInvalidName
+		if req.Name == "" {
+			code = service.CodeValidation
+		}
+		return nil, service.NewError(code, err.Error(), map[string]any{"name": req.Name})
+	}
 	if _, exists := f.agents[req.Name]; exists {
 		switch req.OnConflict {
 		case model.ResolveOverwrite:
 			// fall through
 		default:
-			return nil, service.ErrAgentConflict
+			return nil, service.AgentConflictError(req.Name,
+				"agent \""+req.Name+"\" already exists")
 		}
 	}
 	a := &model.Agent{
@@ -73,7 +83,7 @@ func (f *fakeAgents) List(ctx context.Context) ([]model.AgentSummary, error) {
 func (f *fakeAgents) Show(ctx context.Context, name string) (*model.AgentDetail, error) {
 	d, ok := f.agents[name]
 	if !ok {
-		return nil, service.ErrAgentNotFound
+		return nil, service.AgentNotFoundError(name, nil)
 	}
 	return d, nil
 }
@@ -82,7 +92,7 @@ func (f *fakeAgents) Edit(ctx context.Context, req model.EditAgentRequest) (*mod
 	f.editCalls = append(f.editCalls, req)
 	d, ok := f.agents[req.Name]
 	if !ok {
-		return nil, service.ErrAgentNotFound
+		return nil, service.AgentNotFoundError(req.Name, nil)
 	}
 	if req.Identity != nil {
 		ident := *req.Identity
@@ -105,11 +115,11 @@ func (f *fakeAgents) Edit(ctx context.Context, req model.EditAgentRequest) (*mod
 }
 
 func (f *fakeAgents) Delete(ctx context.Context, req model.DeleteAgentRequest) error {
-	if req.NonInteractive && !req.Confirm {
-		return errors.New("confirm required")
+	if !req.Confirm {
+		return service.MissingInputError("confirm", "set --yes to confirm")
 	}
 	if _, ok := f.agents[req.Name]; !ok {
-		return service.ErrAgentNotFound
+		return service.AgentNotFoundError(req.Name, nil)
 	}
 	delete(f.agents, req.Name)
 	f.deleted = append(f.deleted, req.Name)
@@ -119,10 +129,10 @@ func (f *fakeAgents) Delete(ctx context.Context, req model.DeleteAgentRequest) e
 func (f *fakeAgents) Clone(ctx context.Context, name, newName string) (*model.Agent, error) {
 	d, ok := f.agents[name]
 	if !ok {
-		return nil, service.ErrAgentNotFound
+		return nil, service.AgentNotFoundError(name, nil)
 	}
 	if _, exists := f.agents[newName]; exists {
-		return nil, service.ErrAgentConflict
+		return nil, service.AgentConflictError(newName, "agent \""+newName+"\" already exists")
 	}
 	clone := d.Agent
 	clone.Identity.Name = newName
@@ -133,10 +143,10 @@ func (f *fakeAgents) Clone(ctx context.Context, name, newName string) (*model.Ag
 func (f *fakeAgents) Rename(ctx context.Context, oldName, newName string) (*model.Agent, error) {
 	d, ok := f.agents[oldName]
 	if !ok {
-		return nil, service.ErrAgentNotFound
+		return nil, service.AgentNotFoundError(oldName, nil)
 	}
 	if _, exists := f.agents[newName]; exists {
-		return nil, service.ErrAgentConflict
+		return nil, service.AgentConflictError(newName, "agent \""+newName+"\" already exists")
 	}
 	clone := d.Agent
 	clone.Identity.Name = newName

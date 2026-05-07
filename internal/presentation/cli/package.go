@@ -68,64 +68,28 @@ func newPackageShowCmd(deps Deps) *cobra.Command {
 }
 
 func newPackageInstallCmd(deps Deps) *cobra.Command {
-	var (
-		resolution string
-	)
+	var resolution string
 	cmd := &cobra.Command{
 		Use:   "install <package-or-file>",
 		Short: "Install a package",
-		Args:  cobra.ExactArgs(1),
+		Long: `Install a package. Pass --on-conflict {rename|skip|overwrite|cancel}
+to handle agents that already exist; the default returns AGENT_CONFLICT
+so the caller decides explicitly.`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
 			g := globalFlags(c)
-
-			// Inspect first so we can show what will be written.
-			if detail, ierr := deps.Services.Packages.Inspect(c.Context(), args[0]); ierr == nil {
-				fmt.Fprintln(c.OutOrStdout(), "Package contents:")
-				fmt.Fprintf(c.OutOrStdout(), "  name:    %s\n", detail.Manifest.Name)
-				fmt.Fprintf(c.OutOrStdout(), "  version: %s\n", detail.Manifest.Version)
-				fmt.Fprintf(c.OutOrStdout(), "  agents:  %d\n", len(detail.Manifest.Agents))
-				fmt.Fprintf(c.OutOrStdout(), "  caps:    %d\n", len(detail.Manifest.Capabilities))
-				if isInteractive(g) {
-					ok, perr := promptConfirm("Proceed with install?")
-					if perr != nil {
-						return perr
-					}
-					if !ok {
-						return errors.New("install: cancelled")
-					}
-				}
-			}
-
 			req := model.InstallRequest{
-				Source:         args[0],
-				Resolution:     model.ConflictResolution(resolution),
-				NonInteractive: !isInteractive(g),
+				Source:     args[0],
+				Resolution: model.ConflictResolution(resolution),
 			}
-
-			// Loop on conflict in interactive mode.
-			for {
-				res, err := deps.Services.Packages.Install(c.Context(), req)
-				if err == nil {
-					if g.JSON {
-						return jsonWrite(c.OutOrStdout(), res)
-					}
-					return renderInstallResult(c.OutOrStdout(), res)
-				}
-				if !isInteractive(g) || !errors.Is(err, service.ErrAgentConflict) {
-					return err
-				}
-				// Interactive prompt for resolution.
-				name := extractConflictName(err.Error())
-				choice, perr := promptSelect(fmt.Sprintf("Conflict on %q. Resolve?", name),
-					[]string{"rename", "skip", "overwrite", "cancel"})
-				if perr != nil {
-					return perr
-				}
-				if choice == "cancel" {
-					return errors.New("install: cancelled")
-				}
-				req.Resolution = model.ConflictResolution(choice)
+			res, err := deps.Services.Packages.Install(c.Context(), req)
+			if err != nil {
+				return err
 			}
+			if g.JSON {
+				return jsonWrite(c.OutOrStdout(), res)
+			}
+			return renderInstallResult(c.OutOrStdout(), res)
 		},
 	}
 	cmd.Flags().StringVar(&resolution, "on-conflict", "", "rename|skip|overwrite|cancel")
@@ -159,33 +123,16 @@ func renderInstallResult(w io.Writer, r *model.InstallResult) error {
 	return nil
 }
 
-// extractConflictName tries to pull the offending agent name out of the
-// service error string, which is of the form "...agent %q exists...".
-func extractConflictName(s string) string {
-	if i := strings.Index(s, "agent \""); i >= 0 {
-		rest := s[i+len("agent \""):]
-		if j := strings.Index(rest, "\""); j > 0 {
-			return rest[:j]
-		}
-	}
-	return ""
-}
-
 func newPackageUninstallCmd(deps Deps) *cobra.Command {
-	return &cobra.Command{
+	var yes bool
+	cmd := &cobra.Command{
 		Use:   "uninstall <name>",
 		Short: "Uninstall a package (deletes the imported Agent)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
-			g := globalFlags(c)
-			if isInteractive(g) {
-				ok, perr := promptConfirm(fmt.Sprintf("Uninstall %q?", args[0]))
-				if perr != nil {
-					return perr
-				}
-				if !ok {
-					return errors.New("uninstall: cancelled")
-				}
+			if !yes {
+				return service.MissingInputError("yes",
+					"package uninstall is destructive; pass --yes to confirm")
 			}
 			if err := deps.Services.Packages.Uninstall(c.Context(), args[0]); err != nil {
 				return err
@@ -194,6 +141,8 @@ func newPackageUninstallCmd(deps Deps) *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&yes, "yes", false, "confirm uninstall (required)")
+	return cmd
 }
 
 func newPackageExportCmd(deps Deps) *cobra.Command {
@@ -215,6 +164,10 @@ func newPackageExportCmd(deps Deps) *cobra.Command {
 			})
 			if err != nil {
 				return err
+			}
+			g := globalFlags(c)
+			if g.JSON {
+				return jsonWrite(c.OutOrStdout(), res)
 			}
 			fmt.Fprintf(c.OutOrStdout(), "Wrote %s\n", res.Path)
 			return nil

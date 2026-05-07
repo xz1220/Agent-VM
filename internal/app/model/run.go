@@ -19,16 +19,15 @@ const (
 // drift checks. Presentation layer formats it; application layer
 // records it; it is not free-form text downstream of the driver.
 type Warning struct {
-	Code    string
-	Message string
+	Code    string `json:"code"`
+	Message string `json:"message"`
 }
 
 // RunRequest is the application-layer request to run an Agent.
 type RunRequest struct {
-	Agent          string
-	Runtime        string // optional override; empty -> resolve from agent prefs
-	NonInteractive bool
-	DriftPolicy    DriftPolicy
+	Agent       string      `json:"agent"`
+	Runtime     string      `json:"runtime,omitempty"`
+	DriftPolicy DriftPolicy `json:"drift_policy,omitempty"`
 }
 
 // DriftPolicy describes how the user wants AVM to react when the
@@ -36,7 +35,7 @@ type RunRequest struct {
 type DriftPolicy string
 
 const (
-	DriftAsk     DriftPolicy = ""
+	DriftAsk     DriftPolicy = "" // unset; service will reject if drift detected
 	DriftMerge   DriftPolicy = "merge"
 	DriftDiscard DriftPolicy = "discard"
 	DriftKeep    DriftPolicy = "keep" // keep this run only
@@ -45,45 +44,45 @@ const (
 // RunPreview is what `avm run --preview` returns: the plan AVM intends
 // to apply, without actually launching the runtime.
 type RunPreview struct {
-	Agent      string
-	Runtime    string
-	WritePaths []string
-	Boundary   BoundarySummary
-	Mapping    []FieldMappingSummary
-	Warnings   []Warning
-	Drift      []DiffEntry
+	Agent      string                `json:"agent"`
+	Runtime    string                `json:"runtime"`
+	WritePaths []string              `json:"write_paths,omitempty"`
+	Boundary   BoundarySummary       `json:"boundary,omitempty"`
+	Mapping    []FieldMappingSummary `json:"mapping,omitempty"`
+	Warnings   []Warning             `json:"warnings,omitempty"`
+	Drift      []DiffEntry           `json:"drift,omitempty"`
 }
 
 // BoundarySummary is a model-layer projection of runtime.Boundary so
 // that callers above runtime layer don't import runtime types directly.
 type BoundarySummary struct {
-	StateDir string
-	EnvKeys  []string // names only; values are not exported
+	StateDir string   `json:"state_dir,omitempty"`
+	EnvKeys  []string `json:"env_keys,omitempty"` // names only; values are not exported
 }
 
 // RunResult is the outcome of a launch.
 type RunResult struct {
-	Preview   RunPreview
-	StartedAt time.Time
-	EndedAt   time.Time
-	ExitCode  int
+	Preview   RunPreview `json:"preview"`
+	StartedAt time.Time  `json:"started_at"`
+	EndedAt   time.Time  `json:"ended_at"`
+	ExitCode  int        `json:"exit_code"`
 }
 
 // RunRecord is what RunLog persists.
 type RunRecord struct {
-	Agent     string
-	Runtime   string
-	StartedAt time.Time
-	EndedAt   time.Time
-	ExitCode  int
-	Drift     []DiffEntry
-	Warnings  []Warning
+	Agent     string      `json:"agent"`
+	Runtime   string      `json:"runtime"`
+	StartedAt time.Time   `json:"started_at"`
+	EndedAt   time.Time   `json:"ended_at"`
+	ExitCode  int         `json:"exit_code"`
+	Drift     []DiffEntry `json:"drift,omitempty"`
+	Warnings  []Warning   `json:"warnings,omitempty"`
 }
 
 // DiffEntry describes a drift between Agent definition and runtime
 // managed config (or between desired and existing managed file).
 type DiffEntry struct {
-	Path   string
-	Field  string
-	Reason string
+	Path   string `json:"path"`
+	Field  string `json:"field,omitempty"`
+	Reason string `json:"reason"`
 }

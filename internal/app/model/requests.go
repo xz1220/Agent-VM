@@ -3,16 +3,15 @@ package model
 // CreateAgentRequest captures the user's intent to create an Agent.
 // Source describes blank/default vs existing-package origin (see PRD §4.2).
 type CreateAgentRequest struct {
-	Name           string
-	Description    string
-	Role           string
-	Instructions   Instructions
-	Skills         []CapabilityRef
-	MCP            []CapabilityRef
-	Runtimes       []RuntimePref
-	Source         CreateSource
-	OnConflict     ConflictResolution
-	NonInteractive bool
+	Name         string             `json:"name"`
+	Description  string             `json:"description,omitempty"`
+	Role         string             `json:"role,omitempty"`
+	Instructions Instructions       `json:"instructions,omitempty"`
+	Skills       []CapabilityRef    `json:"skills,omitempty"`
+	MCP          []CapabilityRef    `json:"mcp,omitempty"`
+	Runtimes     []RuntimePref      `json:"runtimes,omitempty"`
+	Source       CreateSource       `json:"source,omitempty"`
+	OnConflict   ConflictResolution `json:"on_conflict,omitempty"`
 }
 
 // CreateSource enumerates create origins per PRD §4.2.
@@ -27,24 +26,22 @@ const (
 // EditAgentRequest captures partial-edit intent. Nil pointers mean
 // "keep existing"; non-nil pointers replace the field.
 type EditAgentRequest struct {
-	Name           string
-	Identity       *Identity
-	Instructions   *Instructions
-	Skills         *[]CapabilityRef
-	MCP            *[]CapabilityRef
-	Runtimes       *[]RuntimePref
-	NonInteractive bool
+	Name         string           `json:"name"`
+	Identity     *Identity        `json:"identity,omitempty"`
+	Instructions *Instructions    `json:"instructions,omitempty"`
+	Skills       *[]CapabilityRef `json:"skills,omitempty"`
+	MCP          *[]CapabilityRef `json:"mcp,omitempty"`
+	Runtimes     *[]RuntimePref   `json:"runtimes,omitempty"`
 }
 
 // DeleteAgentRequest controls deletion behavior.
 type DeleteAgentRequest struct {
-	Name           string
-	Confirm        bool // required in non-interactive mode
-	NonInteractive bool
+	Name    string `json:"name"`
+	Confirm bool   `json:"confirm,omitempty"`
 }
 
 // DiscoverRequest scopes a capability discovery call.
 type DiscoverRequest struct {
-	Kinds    []CapabilityKind // empty = all
-	Runtimes []string         // empty = all detected
+	Kinds    []CapabilityKind `json:"kinds,omitempty"`    // empty = all
+	Runtimes []string         `json:"runtimes,omitempty"` // empty = all detected
 }

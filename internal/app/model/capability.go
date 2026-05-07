@@ -27,34 +27,34 @@ const (
 
 // CapabilityRecord is an entry in the AVM capability store.
 type CapabilityRecord struct {
-	ID         CapabilityID
-	Kind       CapabilityKind
-	Name       string
-	Version    string
-	Source     CapabilitySource
-	Checksum   string
-	ImportFrom string // optional audit: package name or runtime path
+	ID         CapabilityID     `json:"id"`
+	Kind       CapabilityKind   `json:"kind"`
+	Name       string           `json:"name"`
+	Version    string           `json:"version,omitempty"`
+	Source     CapabilitySource `json:"source"`
+	Checksum   string           `json:"checksum,omitempty"`
+	ImportFrom string           `json:"import_from,omitempty"` // optional audit: package name or runtime path
 }
 
 // GlobalCapability is what a runtime reports during global discovery.
 // It does not enter Agent references directly — users must explicitly
 // import it into the AVM capability store first.
 type GlobalCapability struct {
-	Runtime string
-	Kind    CapabilityKind
-	Name    string
-	Path    string
-	Version string
+	Runtime string         `json:"runtime"`
+	Kind    CapabilityKind `json:"kind"`
+	Name    string         `json:"name"`
+	Path    string         `json:"path,omitempty"`
+	Version string         `json:"version,omitempty"`
 }
 
 // CapabilityCandidate is what AVM presents to users at create/edit time.
 // It unifies AVM-managed records with runtime global discoveries and
 // must always carry a Source so the UI can explain provenance.
 type CapabilityCandidate struct {
-	Kind     CapabilityKind
-	Name     string
-	Source   CapabilitySource
-	Record   *CapabilityRecord // set when Source != SourceRuntimeGlobal
-	Global   *GlobalCapability // set when Source == SourceRuntimeGlobal
-	Conflict bool              // true when name collides across sources
+	Kind     CapabilityKind    `json:"kind"`
+	Name     string            `json:"name"`
+	Source   CapabilitySource  `json:"source"`
+	Record   *CapabilityRecord `json:"record,omitempty"` // set when Source != SourceRuntimeGlobal
+	Global   *GlobalCapability `json:"global,omitempty"` // set when Source == SourceRuntimeGlobal
+	Conflict bool              `json:"conflict,omitempty"`
 }

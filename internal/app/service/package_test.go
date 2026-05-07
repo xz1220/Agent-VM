@@ -136,9 +136,8 @@ func TestPackages_Install_ConflictAskNonInteractive(t *testing.T) {
 	}
 	pkgs := NewPackages(agents, capstore.New(t.TempDir()), packageio.New())
 	_, err := pkgs.Install(context.Background(), model.InstallRequest{
-		Source:         pkgPath,
-		Resolution:     model.ResolveAsk,
-		NonInteractive: true,
+		Source:     pkgPath,
+		Resolution: model.ResolveAsk,
 	})
 	if !errors.Is(err, agentstore.ErrConflict) {
 		t.Fatalf("expected ErrConflict, got %v", err)

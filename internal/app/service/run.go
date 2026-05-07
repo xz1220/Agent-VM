@@ -44,16 +44,20 @@ func NewRunner(
 
 // resolveRuntime implements PRD §2.2: explicit override wins; single
 // preference auto-resolves; multiple preferences require explicit
-// selection. Non-interactive callers must supply --runtime.
+// selection. Callers must supply --runtime when ambiguous.
 func (s *Runner) resolveRuntime(req model.RunRequest, agent *model.Agent) (string, error) {
 	if req.Runtime != "" {
 		if _, err := s.Runtimes.Resolve(req.Runtime); err != nil {
-			return "", fmt.Errorf("runner: requested runtime %q: %w", req.Runtime, err)
+			return "", WrapError(CodeRuntimeNotFound, err,
+				fmt.Sprintf("runtime %q not registered", req.Runtime),
+				map[string]any{"runtime": req.Runtime})
 		}
 		return req.Runtime, nil
 	}
 	if len(agent.Runtimes) == 0 {
-		return "", fmt.Errorf("runner: agent %q has no runtimes configured; pass --runtime", agent.Identity.Name)
+		return "", NewError(CodeRuntimeMissing,
+			fmt.Sprintf("agent %q has no runtimes configured; pass --runtime", agent.Identity.Name),
+			map[string]any{"agent": agent.Identity.Name})
 	}
 	if len(agent.Runtimes) == 1 {
 		return agent.Runtimes[0].Runtime, nil
@@ -70,10 +74,14 @@ func (s *Runner) resolveRuntime(req model.RunRequest, agent *model.Agent) (strin
 	if count == 1 {
 		return def, nil
 	}
-	// Otherwise the user must choose. Service does not own UI; this
-	// is the same wording for interactive and non-interactive — the
-	// presentation layer can intercept in interactive mode and prompt.
-	return "", fmt.Errorf("runner: agent %q has multiple runtimes; pass --runtime", agent.Identity.Name)
+	// Otherwise the caller (UI/CLI) must choose.
+	options := make([]string, 0, len(agent.Runtimes))
+	for _, r := range agent.Runtimes {
+		options = append(options, r.Runtime)
+	}
+	return "", NewError(CodeRuntimeAmbiguous,
+		fmt.Sprintf("agent %q has multiple runtimes; pass --runtime", agent.Identity.Name),
+		map[string]any{"agent": agent.Identity.Name, "runtimes": options})
 }
 
 // loadPlan loads agent + driver and produces a Plan and Boundary.
@@ -83,7 +91,11 @@ func (s *Runner) loadPlan(ctx context.Context, req model.RunRequest) (*model.Age
 	}
 	agent, err := s.Repo.Get(req.Agent)
 	if err != nil {
-		return nil, nil, nil, runtime.Boundary{}, "", fmt.Errorf("runner: load agent %q: %w", req.Agent, err)
+		if errors.Is(err, agentstore.ErrNotFound) {
+			return nil, nil, nil, runtime.Boundary{}, "", AgentNotFoundError(req.Agent, err)
+		}
+		return nil, nil, nil, runtime.Boundary{}, "", WrapError(CodeIOFailure, err,
+			"load agent: "+err.Error(), map[string]any{"agent": req.Agent})
 	}
 	rtName, err := s.resolveRuntime(req, agent)
 	if err != nil {
@@ -91,15 +103,21 @@ func (s *Runner) loadPlan(ctx context.Context, req model.RunRequest) (*model.Age
 	}
 	drv, err := s.Runtimes.Resolve(rtName)
 	if err != nil {
-		return agent, nil, nil, runtime.Boundary{}, rtName, fmt.Errorf("runner: resolve %q: %w", rtName, err)
+		return agent, nil, nil, runtime.Boundary{}, rtName, WrapError(CodeRuntimeNotFound, err,
+			fmt.Sprintf("resolve runtime %q: %v", rtName, err),
+			map[string]any{"runtime": rtName})
 	}
 	plan, err := drv.Plan(ctx, agent)
 	if err != nil {
-		return agent, drv, nil, runtime.Boundary{}, rtName, fmt.Errorf("runner: plan %q: %w", rtName, err)
+		return agent, drv, nil, runtime.Boundary{}, rtName, WrapError(CodeRuntimePlanFailure, err,
+			fmt.Sprintf("runtime %q failed to render plan: %v", rtName, err),
+			map[string]any{"runtime": rtName, "agent": agent.Identity.Name})
 	}
 	bnd, err := drv.Boundary(ctx, agent)
 	if err != nil {
-		return agent, drv, plan, runtime.Boundary{}, rtName, fmt.Errorf("runner: boundary %q: %w", rtName, err)
+		return agent, drv, plan, runtime.Boundary{}, rtName, WrapError(CodeRuntimePlanFailure, err,
+			fmt.Sprintf("runtime %q boundary failure: %v", rtName, err),
+			map[string]any{"runtime": rtName, "agent": agent.Identity.Name})
 	}
 	return agent, drv, plan, bnd, rtName, nil
 }
@@ -161,7 +179,9 @@ func (s *Runner) Preview(ctx context.Context, req model.RunRequest) (*model.RunP
 	if s.Writer != nil && len(plan.Files) > 0 {
 		d, derr := s.Writer.DryRun(ctx, plan.Files)
 		if derr != nil {
-			return nil, fmt.Errorf("runner: dryrun: %w", derr)
+			return nil, WrapError(CodeIOFailure, derr,
+				"managed-file dryrun: "+derr.Error(),
+				map[string]any{"runtime": rtName, "agent": agent.Identity.Name})
 		}
 		drift = d
 	}
@@ -170,36 +190,35 @@ func (s *Runner) Preview(ctx context.Context, req model.RunRequest) (*model.RunP
 }
 
 // applyDriftPolicy decides whether to proceed with apply given a drift
-// list and a user-selected policy. For now:
-//   - empty drift always proceeds
-//   - DriftKeep / DriftMerge → proceed (PRD §4.4 default in non-interactive
-//     is "keep + write run log")
-//   - DriftDiscard → proceed (managedfile.Apply will overwrite)
-//   - DriftAsk in non-interactive mode defaults to DriftKeep
+// list and a user-selected policy.
 //
-// The merge/discard semantic split is currently identical at this layer
-// because managedfile.Apply always overwrites. A richer implementation
-// (merge fields back into Agent definition) is a TODO for later.
-func applyDriftPolicy(drift []model.DiffEntry, req model.RunRequest) error {
+// Behavior (post-rewrite — pure plumbing, no interactive default):
+//   - empty drift                      → proceed
+//   - DriftAsk + drift > 0             → return CodeDriftDetected (caller must
+//     re-issue with explicit --drift)
+//   - DriftKeep / DriftMerge / Discard → proceed; managedfile.Apply overwrites
+//
+// Merge-back-into-Agent semantics is a TODO; today merge and discard
+// both delegate to managedfile.Apply (which overwrites).
+func applyDriftPolicy(drift []model.DiffEntry, req model.RunRequest, agentName, rtName string) error {
 	if len(drift) == 0 {
 		return nil
 	}
-	policy := req.DriftPolicy
-	if policy == model.DriftAsk {
-		// Service does not own UI. In interactive mode the
-		// presentation layer should call Preview, prompt the user,
-		// and re-issue Run with an explicit policy. In
-		// non-interactive mode PRD §4.4 says default is keep.
-		policy = model.DriftKeep
-	}
-	switch policy {
+	switch req.DriftPolicy {
+	case model.DriftAsk:
+		return NewError(CodeDriftDetected,
+			fmt.Sprintf("drift detected for agent %q on runtime %q; pass --drift", agentName, rtName),
+			map[string]any{
+				"agent":   agentName,
+				"runtime": rtName,
+				"entries": drift,
+			})
 	case model.DriftKeep, model.DriftMerge, model.DriftDiscard:
-		// All currently fall through to "apply". Merge is a TODO
-		// (would also write back into the Agent definition) and
-		// Discard is the default Apply behavior.
 		return nil
 	default:
-		return fmt.Errorf("runner: unknown drift policy %q", policy)
+		return NewError(CodeValidation,
+			fmt.Sprintf("unknown drift policy %q", req.DriftPolicy),
+			map[string]any{"drift_policy": string(req.DriftPolicy)})
 	}
 }
 
@@ -218,9 +237,11 @@ func (s *Runner) Run(ctx context.Context, req model.RunRequest) (*model.RunResul
 	if s.Writer != nil && len(plan.Files) > 0 {
 		drift, err = s.Writer.DryRun(ctx, plan.Files)
 		if err != nil {
-			return nil, fmt.Errorf("runner: dryrun: %w", err)
+			return nil, WrapError(CodeIOFailure, err,
+				"managed-file dryrun: "+err.Error(),
+				map[string]any{"runtime": rtName, "agent": agent.Identity.Name})
 		}
-		if err := applyDriftPolicy(drift, req); err != nil {
+		if err := applyDriftPolicy(drift, req, agent.Identity.Name, rtName); err != nil {
 			return nil, err
 		}
 	}
@@ -228,13 +249,17 @@ func (s *Runner) Run(ctx context.Context, req model.RunRequest) (*model.RunResul
 	// Apply the managed files.
 	if s.Writer != nil && len(plan.Files) > 0 {
 		if _, err := s.Writer.Apply(ctx, plan.Files); err != nil {
-			return nil, fmt.Errorf("runner: apply: %w", err)
+			return nil, WrapError(CodeIOFailure, err,
+				"managed-file apply: "+err.Error(),
+				map[string]any{"runtime": rtName, "agent": agent.Identity.Name})
 		}
 	}
 
 	spec, err := drv.LaunchSpec(ctx, agent, plan)
 	if err != nil {
-		return nil, fmt.Errorf("runner: launch spec: %w", err)
+		return nil, WrapError(CodeRuntimePlanFailure, err,
+			fmt.Sprintf("runtime %q launch spec: %v", rtName, err),
+			map[string]any{"runtime": rtName, "agent": agent.Identity.Name})
 	}
 
 	preview := buildPreview(agent, rtName, plan, bnd, drift)
@@ -261,7 +286,9 @@ func (s *Runner) Run(ctx context.Context, req model.RunRequest) (*model.RunResul
 	}
 
 	if runErr != nil {
-		return nil, fmt.Errorf("runner: run: %w", runErr)
+		return nil, WrapError(CodeRuntimeBinaryMissing, runErr,
+			"runtime process failed: "+runErr.Error(),
+			map[string]any{"runtime": rtName, "agent": agent.Identity.Name})
 	}
 	return &model.RunResult{
 		Preview:   preview,

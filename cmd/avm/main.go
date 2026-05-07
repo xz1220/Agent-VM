@@ -26,23 +26,33 @@ import (
 )
 
 func main() {
-	if err := run(); err != nil {
-		fmt.Fprintf(os.Stderr, "avm: %v\n", err)
-		os.Exit(1)
-	}
+	os.Exit(run())
 }
 
-func run() error {
+// run is the bootstrap. It returns the exit code rather than an error
+// because the CLI layer has already rendered any error (human or JSON)
+// via cli.NewRoot's RunE wrapper. Bootstrap-time errors (composition-
+// root failures) bypass that wrapper, so we print them ourselves.
+func run() int {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
 	deps, err := buildDeps()
 	if err != nil {
-		return err
+		fmt.Fprintf(os.Stderr, "avm: %v\n", err)
+		return 1
 	}
 	root := cli.NewRoot(deps)
 	root.SetContext(ctx)
-	return root.ExecuteContext(ctx)
+	if err := root.ExecuteContext(ctx); err != nil {
+		// Honour exit-code-bearing errors so `avm run` can propagate
+		// the underlying runtime's exit code to the shell.
+		if ec, ok := err.(interface{ ExitCode() int }); ok {
+			return ec.ExitCode()
+		}
+		return 1
+	}
+	return 0
 }
 
 func buildDeps() (cli.Deps, error) {

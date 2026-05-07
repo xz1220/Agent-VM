@@ -43,10 +43,12 @@ var supportedShells = map[string]struct{}{
 
 func validateShell(shell string) error {
 	if shell == "" {
-		return errors.New("system: empty shell")
+		return MissingInputError("shell", "shell name is required (bash|zsh|fish)")
 	}
 	if _, ok := supportedShells[shell]; !ok {
-		return fmt.Errorf("system: unsupported shell %q (want bash|zsh|fish)", shell)
+		return NewError(CodeValidation,
+			fmt.Sprintf("unsupported shell %q (want bash|zsh|fish)", shell),
+			map[string]any{"shell": shell})
 	}
 	return nil
 }
@@ -61,7 +63,9 @@ func (s *System) Init(ctx context.Context) (*model.InitResult, error) {
 		return res, nil
 	}
 	if err := s.Layout.EnsureDirs(); err != nil {
-		return nil, fmt.Errorf("system: init: %w", err)
+		return nil, WrapError(CodeIOFailure, err,
+			"init AVM home: "+err.Error(),
+			map[string]any{"root": s.Layout.Root})
 	}
 	res.CreatedPaths = []string{
 		s.Layout.Root,
@@ -82,7 +86,9 @@ func (s *System) UninstallHome(ctx context.Context) (*model.UninstallResult, err
 		return res, nil
 	}
 	if err := os.RemoveAll(s.Layout.Root); err != nil {
-		return res, fmt.Errorf("system: uninstall home: %w", err)
+		return res, WrapError(CodeIOFailure, err,
+			"remove AVM home: "+err.Error(),
+			map[string]any{"root": s.Layout.Root})
 	}
 	res.Removed = true
 	return res, nil
@@ -97,7 +103,9 @@ func (s *System) CompletionPath(ctx context.Context, shell string) (string, erro
 	}
 	dir := filepath.Join(s.Layout.Root, "shell")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", fmt.Errorf("system: completion path: %w", err)
+		return "", WrapError(CodeIOFailure, err,
+			"create shell completion dir: "+err.Error(),
+			map[string]any{"dir": dir})
 	}
 	return filepath.Join(dir, "avm-completion."+shell), nil
 }
@@ -119,7 +127,9 @@ func (s *System) RemoveCompletion(ctx context.Context, shell string) error {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil
 		}
-		return fmt.Errorf("system: remove completion: %w", err)
+		return WrapError(CodeIOFailure, err,
+			"remove shell completion file: "+err.Error(),
+			map[string]any{"path": p})
 	}
 	return nil
 }

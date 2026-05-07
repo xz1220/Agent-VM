@@ -43,7 +43,8 @@ func (s *Capabilities) Discover(ctx context.Context, req model.DiscoverRequest) 
 	// AVM-managed records.
 	recs, err := s.Store.List()
 	if err != nil {
-		return nil, err
+		return nil, WrapError(CodeIOFailure, err,
+			"list capability store: "+err.Error(), nil)
 	}
 	for i := range recs {
 		r := recs[i]

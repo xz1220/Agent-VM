@@ -13,7 +13,7 @@ func TestRun_PreviewOnly(t *testing.T) {
 		preview: &model.RunPreview{Agent: "alpha", Runtime: "codex", WritePaths: []string{"/tmp/x"}},
 	}
 	deps := newTestDeps(nil, nil, runner, nil, nil)
-	out, _, err := runCmd(t, deps, "run", "alpha", "--preview", "--runtime", "codex", "--non-interactive")
+	out, _, err := runCmd(t, deps, "run", "alpha", "--preview", "--runtime", "codex")
 	if err != nil {
 		t.Fatalf("execute: %v", err)
 	}
@@ -28,7 +28,7 @@ func TestRun_Run(t *testing.T) {
 		ExitCode: 0,
 	}}
 	deps := newTestDeps(nil, nil, runner, nil, nil)
-	out, _, err := runCmd(t, deps, "run", "alpha", "--runtime", "codex", "--non-interactive")
+	out, _, err := runCmd(t, deps, "run", "alpha", "--runtime", "codex")
 	if err != nil {
 		t.Fatalf("execute: %v", err)
 	}
@@ -43,7 +43,7 @@ func TestRun_ExitCodePropagates(t *testing.T) {
 		ExitCode: 2,
 	}}
 	deps := newTestDeps(nil, nil, runner, nil, nil)
-	_, _, err := runCmd(t, deps, "run", "alpha", "--runtime", "codex", "--non-interactive")
+	_, _, err := runCmd(t, deps, "run", "alpha", "--runtime", "codex")
 	if err == nil {
 		t.Fatalf("expected non-zero exit error, got none")
 	}
@@ -61,7 +61,7 @@ func TestRun_MultiRuntime_NonInteractiveFails(t *testing.T) {
 		previewErr: errors.New("runner: agent \"alpha\" has multiple runtimes; pass --runtime"),
 	}
 	deps := newTestDeps(nil, nil, runner, nil, nil)
-	_, _, err := runCmd(t, deps, "run", "alpha", "--non-interactive")
+	_, _, err := runCmd(t, deps, "run", "alpha")
 	if err == nil {
 		t.Fatalf("expected error, got none")
 	}

@@ -124,14 +124,19 @@ func TestAgentShow(t *testing.T) {
 	}
 }
 
-func TestAgentCreate_NonInteractive_RequiresName(t *testing.T) {
+func TestAgentCreate_RequiresName(t *testing.T) {
 	deps := newTestDeps(nil, nil, nil, nil, nil)
-	_, _, err := runCmd(t, deps, "--non-interactive", "agent", "create")
+	_, _, err := runCmd(t, deps, "agent", "create")
 	if err == nil {
 		t.Fatalf("expected error for missing --name, got none")
 	}
-	if !strings.Contains(err.Error(), "non-interactive create requires") {
-		t.Fatalf("unexpected error: %v", err)
+	se := service.AsError(err)
+	if se == nil {
+		t.Fatalf("expected typed *service.Error, got %T %v", err, err)
+	}
+	// Empty Name fails name regex validation in service.
+	if se.Code != service.CodeValidation && se.Code != service.CodeAgentInvalidName {
+		t.Fatalf("unexpected error code %s (%s)", se.Code, se.Message)
 	}
 }
 
@@ -139,7 +144,7 @@ func TestAgentCreate_NonInteractive_OK(t *testing.T) {
 	agents := newFakeAgents()
 	deps := newTestDeps(agents, nil, nil, nil, nil)
 	out, _, err := runCmd(t, deps,
-		"--non-interactive", "agent", "create",
+		"agent", "create",
 		"--name", "alpha",
 		"--description", "test agent",
 		"--runtime", "codex",
@@ -163,7 +168,7 @@ func TestAgentDelete_NonInteractive_RequiresYes(t *testing.T) {
 	agents := newFakeAgents()
 	agents.put(model.Agent{Identity: model.Identity{Name: "alpha"}})
 	deps := newTestDeps(agents, nil, nil, nil, nil)
-	_, _, err := runCmd(t, deps, "--non-interactive", "agent", "delete", "alpha")
+	_, _, err := runCmd(t, deps, "agent", "delete", "alpha")
 	if err == nil {
 		t.Fatalf("expected error without --yes")
 	}
@@ -173,7 +178,7 @@ func TestAgentDelete_NonInteractive_OK(t *testing.T) {
 	agents := newFakeAgents()
 	agents.put(model.Agent{Identity: model.Identity{Name: "alpha"}})
 	deps := newTestDeps(agents, nil, nil, nil, nil)
-	out, _, err := runCmd(t, deps, "--non-interactive", "agent", "delete", "alpha", "--yes")
+	out, _, err := runCmd(t, deps, "agent", "delete", "alpha", "--yes")
 	if err != nil {
 		t.Fatalf("execute: %v", err)
 	}
@@ -216,7 +221,7 @@ func TestAgentEdit_NonInteractive(t *testing.T) {
 	agents.put(model.Agent{Identity: model.Identity{Name: "alpha"}})
 	deps := newTestDeps(agents, nil, nil, nil, nil)
 	out, _, err := runCmd(t, deps,
-		"--non-interactive", "agent", "edit", "alpha",
+		"agent", "edit", "alpha",
 		"--description", "updated",
 	)
 	if err != nil {
@@ -228,5 +233,85 @@ func TestAgentEdit_NonInteractive(t *testing.T) {
 	if len(agents.editCalls) != 1 || agents.editCalls[0].Identity == nil ||
 		agents.editCalls[0].Identity.Description != "updated" {
 		t.Fatalf("expected edit with description, got %+v", agents.editCalls)
+	}
+}
+
+// TestAgentEdit_ReplacesSkillsList covers the expanded non-interactive
+// edit flag set: --skill replaces the entire skills list.
+func TestAgentEdit_ReplacesSkillsList(t *testing.T) {
+	agents := newFakeAgents()
+	agents.put(model.Agent{
+		Identity: model.Identity{Name: "alpha"},
+		Skills:   []model.CapabilityRef{{ID: "cap_old", Kind: model.CapabilityKindSkill}},
+	})
+	deps := newTestDeps(agents, nil, nil, nil, nil)
+	_, _, err := runCmd(t, deps,
+		"agent", "edit", "alpha",
+		"--skill", "cap_one",
+		"--skill", "cap_two",
+	)
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if len(agents.editCalls) != 1 {
+		t.Fatalf("expected 1 edit call, got %d", len(agents.editCalls))
+	}
+	got := agents.editCalls[0]
+	if got.Skills == nil {
+		t.Fatalf("expected Skills to be set (nil pointer means keep-existing)")
+	}
+	if len(*got.Skills) != 2 || (*got.Skills)[0].ID != "cap_one" || (*got.Skills)[1].ID != "cap_two" {
+		t.Fatalf("expected [cap_one cap_two], got %+v", *got.Skills)
+	}
+}
+
+// TestAgentEdit_KeepsSkillsWhenFlagAbsent verifies that not passing
+// --skill leaves Skills as nil so the service preserves existing value.
+func TestAgentEdit_KeepsSkillsWhenFlagAbsent(t *testing.T) {
+	agents := newFakeAgents()
+	agents.put(model.Agent{Identity: model.Identity{Name: "alpha"}})
+	deps := newTestDeps(agents, nil, nil, nil, nil)
+	_, _, err := runCmd(t, deps,
+		"agent", "edit", "alpha",
+		"--description", "x",
+	)
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	got := agents.editCalls[0]
+	if got.Skills != nil {
+		t.Fatalf("expected Skills nil (keep-existing), got %+v", got.Skills)
+	}
+	if got.MCP != nil {
+		t.Fatalf("expected MCP nil, got %+v", got.MCP)
+	}
+	if got.Runtimes != nil {
+		t.Fatalf("expected Runtimes nil, got %+v", got.Runtimes)
+	}
+}
+
+// TestJSONError_Envelope verifies that --json mode wraps any error in a
+// stable {"error": {code, message, details}} envelope on stdout.
+func TestJSONError_Envelope(t *testing.T) {
+	deps := newTestDeps(nil, nil, nil, nil, nil)
+	out, _, err := runCmd(t, deps, "--json", "agent", "show", "ghost")
+	if err == nil {
+		t.Fatalf("expected error for missing agent")
+	}
+	var env struct {
+		Error *service.Error `json:"error"`
+	}
+	if jerr := json.Unmarshal([]byte(out), &env); jerr != nil {
+		t.Fatalf("invalid JSON envelope: %v\noutput: %s", jerr, out)
+	}
+	if env.Error == nil {
+		t.Fatalf("expected error envelope populated, got %s", out)
+	}
+	if env.Error.Code != service.CodeAgentNotFound {
+		t.Fatalf("expected AGENT_NOT_FOUND, got %s", env.Error.Code)
+	}
+	name, _ := env.Error.Details["name"].(string)
+	if name != "ghost" {
+		t.Fatalf("expected details.name=ghost, got %v", env.Error.Details)
 	}
 }

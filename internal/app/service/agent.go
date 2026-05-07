@@ -52,6 +52,20 @@ func withOverwrite(repo agentstore.Repository, v bool, fn func() error) error {
 	return fn()
 }
 
+// validationError translates a model.Agent.Validate failure into a
+// typed Error. The validator only ever rejects the name regex today,
+// so we map to CodeAgentInvalidName when the agent has a Name set;
+// otherwise CodeValidation.
+func validationError(name string, err error) *Error {
+	if name != "" {
+		return WrapError(CodeAgentInvalidName, err,
+			err.Error(),
+			map[string]any{"name": name},
+		)
+	}
+	return WrapError(CodeValidation, err, err.Error(), nil)
+}
+
 // Create implements PRD §4.2: explicit conflict resolution; never an
 // implicit overwrite.
 func (s *Agents) Create(ctx context.Context, req model.CreateAgentRequest) (*model.Agent, error) {
@@ -70,13 +84,8 @@ func (s *Agents) Create(ctx context.Context, req model.CreateAgentRequest) (*mod
 		Runtimes:     req.Runtimes,
 	}
 	if err := agent.Validate(); err != nil {
-		return nil, fmt.Errorf("agents: create: %w", err)
+		return nil, validationError(req.Name, err)
 	}
-
-	// Source == package: package import is the responsibility of
-	// PackageService.Install. Create itself does not pull from packages.
-	// Callers wanting a package-derived Agent should call Install first
-	// and then optionally Edit the resulting Agent.
 
 	target := req.Name
 	if s.Repo.Exists(target) {
@@ -85,29 +94,43 @@ func (s *Agents) Create(ctx context.Context, req model.CreateAgentRequest) (*mod
 			if err := withOverwrite(s.Repo, true, func() error {
 				return s.Repo.Save(agent)
 			}); err != nil {
-				return nil, fmt.Errorf("agents: create: %w", err)
+				return nil, WrapError(CodeIOFailure, err,
+					fmt.Sprintf("save agent %q: %v", target, err),
+					map[string]any{"name": target},
+				)
 			}
 			return agent, nil
 		case model.ResolveCancel:
-			return nil, fmt.Errorf("agents: create: cancelled: %w", agentstore.ErrConflict)
+			return nil, AgentConflictError(target,
+				fmt.Sprintf("create cancelled: agent %q already exists", target))
 		case model.ResolveRename:
-			if req.NonInteractive {
-				return nil, fmt.Errorf("agents: create: rename requires interactive mode for new name; got conflict on %q: %w", target, agentstore.ErrConflict)
-			}
-			// Without a presentation-supplied new name, we cannot
-			// invent one safely here. Surface conflict to the caller;
-			// presentation layer should reissue Create with a new
-			// Name and OnConflict left blank.
-			return nil, fmt.Errorf("agents: create: rename requires a new name from the caller: %w", agentstore.ErrConflict)
+			// Service cannot invent a fresh name safely; the caller
+			// (UI/CLI) must reissue Create with a new Name and
+			// OnConflict left blank.
+			return nil, AgentConflictError(target,
+				fmt.Sprintf("rename requested but no new name supplied for agent %q", target))
 		case model.ResolveAsk:
-			return nil, fmt.Errorf("agents: create: agent %q already exists: %w", target, agentstore.ErrConflict)
+			return nil, AgentConflictError(target,
+				fmt.Sprintf("agent %q already exists", target))
 		default:
-			return nil, fmt.Errorf("agents: create: unknown conflict resolution %q", req.OnConflict)
+			return nil, NewError(CodeValidation,
+				fmt.Sprintf("unknown conflict resolution %q", req.OnConflict),
+				map[string]any{"on_conflict": string(req.OnConflict)},
+			)
 		}
 	}
 
 	if err := s.Repo.Save(agent); err != nil {
-		return nil, fmt.Errorf("agents: create: %w", err)
+		// Race condition: a parallel writer created the file between
+		// Exists and Save. Surface as conflict if that's what we got.
+		if errors.Is(err, agentstore.ErrConflict) {
+			return nil, AgentConflictError(target,
+				fmt.Sprintf("agent %q already exists (concurrent create)", target))
+		}
+		return nil, WrapError(CodeIOFailure, err,
+			fmt.Sprintf("save agent %q: %v", target, err),
+			map[string]any{"name": target},
+		)
 	}
 	return agent, nil
 }
@@ -117,7 +140,11 @@ func (s *Agents) List(ctx context.Context) ([]model.AgentSummary, error) {
 	if s.Repo == nil {
 		return nil, errors.New("agents: missing repository")
 	}
-	return s.Repo.List()
+	out, err := s.Repo.List()
+	if err != nil {
+		return nil, WrapError(CodeIOFailure, err, "list agents: "+err.Error(), nil)
+	}
+	return out, nil
 }
 
 // Show returns Agent detail enriched with per-runtime mapping summaries.
@@ -128,11 +155,16 @@ func (s *Agents) Show(ctx context.Context, name string) (*model.AgentDetail, err
 	}
 	agent, err := s.Repo.Get(name)
 	if err != nil {
-		return nil, fmt.Errorf("agents: show %q: %w", name, err)
+		if errors.Is(err, agentstore.ErrNotFound) {
+			return nil, AgentNotFoundError(name, err)
+		}
+		return nil, WrapError(CodeIOFailure, err, "load agent: "+err.Error(),
+			map[string]any{"name": name})
 	}
 	src, err := s.Repo.SourcePath(name)
 	if err != nil {
-		return nil, fmt.Errorf("agents: show %q: %w", name, err)
+		return nil, WrapError(CodeIOFailure, err, "agent source path: "+err.Error(),
+			map[string]any{"name": name})
 	}
 	detail := &model.AgentDetail{Agent: *agent, SourcePath: src}
 	if s.Runtimes != nil {
@@ -172,11 +204,15 @@ func (s *Agents) Edit(ctx context.Context, req model.EditAgentRequest) (*model.A
 		return nil, errors.New("agents: missing repository")
 	}
 	if req.Name == "" {
-		return nil, errors.New("agents: edit: empty name")
+		return nil, MissingInputError("name", "agent name is required for edit")
 	}
 	agent, err := s.Repo.Get(req.Name)
 	if err != nil {
-		return nil, fmt.Errorf("agents: edit %q: %w", req.Name, err)
+		if errors.Is(err, agentstore.ErrNotFound) {
+			return nil, AgentNotFoundError(req.Name, err)
+		}
+		return nil, WrapError(CodeIOFailure, err, "load agent: "+err.Error(),
+			map[string]any{"name": req.Name})
 	}
 	if req.Identity != nil {
 		// Preserve the original name regardless of what the request
@@ -198,10 +234,11 @@ func (s *Agents) Edit(ctx context.Context, req model.EditAgentRequest) (*model.A
 		agent.Runtimes = *req.Runtimes
 	}
 	if err := agent.Validate(); err != nil {
-		return nil, fmt.Errorf("agents: edit %q: %w", req.Name, err)
+		return nil, validationError(req.Name, err)
 	}
 	if err := withOverwrite(s.Repo, true, func() error { return s.Repo.Save(agent) }); err != nil {
-		return nil, fmt.Errorf("agents: edit %q: %w", req.Name, err)
+		return nil, WrapError(CodeIOFailure, err, "save agent: "+err.Error(),
+			map[string]any{"name": req.Name})
 	}
 	return agent, nil
 }
@@ -213,13 +250,17 @@ func (s *Agents) Delete(ctx context.Context, req model.DeleteAgentRequest) error
 		return errors.New("agents: missing repository")
 	}
 	if req.Name == "" {
-		return errors.New("agents: delete: empty name")
+		return MissingInputError("name", "agent name is required for delete")
 	}
-	if req.NonInteractive && !req.Confirm {
-		return errors.New("agents: delete: --confirm required in non-interactive mode")
+	if !req.Confirm {
+		return MissingInputError("confirm", "set Confirm=true (CLI: --yes) to acknowledge deletion")
 	}
 	if err := s.Repo.Delete(req.Name); err != nil {
-		return fmt.Errorf("agents: delete %q: %w", req.Name, err)
+		if errors.Is(err, agentstore.ErrNotFound) {
+			return AgentNotFoundError(req.Name, err)
+		}
+		return WrapError(CodeIOFailure, err, "delete agent: "+err.Error(),
+			map[string]any{"name": req.Name})
 	}
 	return nil
 }
@@ -230,23 +271,32 @@ func (s *Agents) Clone(ctx context.Context, name, newName string) (*model.Agent,
 	if s.Repo == nil {
 		return nil, errors.New("agents: missing repository")
 	}
-	if name == "" || newName == "" {
-		return nil, errors.New("agents: clone: empty name")
+	if name == "" {
+		return nil, MissingInputError("name", "source agent name is required")
+	}
+	if newName == "" {
+		return nil, MissingInputError("new_name", "target agent name is required")
 	}
 	src, err := s.Repo.Get(name)
 	if err != nil {
-		return nil, fmt.Errorf("agents: clone %q: %w", name, err)
+		if errors.Is(err, agentstore.ErrNotFound) {
+			return nil, AgentNotFoundError(name, err)
+		}
+		return nil, WrapError(CodeIOFailure, err, "load agent: "+err.Error(),
+			map[string]any{"name": name})
 	}
 	if s.Repo.Exists(newName) {
-		return nil, fmt.Errorf("agents: clone: %q already exists: %w", newName, agentstore.ErrConflict)
+		return nil, AgentConflictError(newName,
+			fmt.Sprintf("clone target %q already exists", newName))
 	}
 	dst := *src
 	dst.Identity.Name = newName
 	if err := dst.Validate(); err != nil {
-		return nil, fmt.Errorf("agents: clone: %w", err)
+		return nil, validationError(newName, err)
 	}
 	if err := s.Repo.Save(&dst); err != nil {
-		return nil, fmt.Errorf("agents: clone: %w", err)
+		return nil, WrapError(CodeIOFailure, err, "save clone: "+err.Error(),
+			map[string]any{"name": newName})
 	}
 	return &dst, nil
 }
@@ -258,30 +308,41 @@ func (s *Agents) Rename(ctx context.Context, oldName, newName string) (*model.Ag
 	if s.Repo == nil {
 		return nil, errors.New("agents: missing repository")
 	}
-	if oldName == "" || newName == "" {
-		return nil, errors.New("agents: rename: empty name")
+	if oldName == "" {
+		return nil, MissingInputError("old_name", "source agent name is required")
+	}
+	if newName == "" {
+		return nil, MissingInputError("new_name", "target agent name is required")
 	}
 	if oldName == newName {
 		return s.Repo.Get(oldName)
 	}
 	src, err := s.Repo.Get(oldName)
 	if err != nil {
-		return nil, fmt.Errorf("agents: rename %q: %w", oldName, err)
+		if errors.Is(err, agentstore.ErrNotFound) {
+			return nil, AgentNotFoundError(oldName, err)
+		}
+		return nil, WrapError(CodeIOFailure, err, "load agent: "+err.Error(),
+			map[string]any{"name": oldName})
 	}
 	if s.Repo.Exists(newName) {
-		return nil, fmt.Errorf("agents: rename: %q already exists: %w", newName, agentstore.ErrConflict)
+		return nil, AgentConflictError(newName,
+			fmt.Sprintf("rename target %q already exists", newName))
 	}
 	dst := *src
 	dst.Identity.Name = newName
 	if err := dst.Validate(); err != nil {
-		return nil, fmt.Errorf("agents: rename: %w", err)
+		return nil, validationError(newName, err)
 	}
 	if err := s.Repo.Save(&dst); err != nil {
-		return nil, fmt.Errorf("agents: rename: save new: %w", err)
+		return nil, WrapError(CodeIOFailure, err, "save renamed agent: "+err.Error(),
+			map[string]any{"name": newName})
 	}
 	if err := s.Repo.Delete(oldName); err != nil {
 		// New file is in place; surface the partial state.
-		return &dst, fmt.Errorf("agents: rename: new saved but old delete failed: %w", err)
+		return &dst, WrapError(CodeIOFailure, err,
+			"new agent saved but old delete failed: "+err.Error(),
+			map[string]any{"old": oldName, "new": newName})
 	}
 	return &dst, nil
 }

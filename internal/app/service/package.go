@@ -70,11 +70,13 @@ func (s *Packages) Inspect(ctx context.Context, file string) (*model.PackageDeta
 		return nil, errors.New("packages: missing IO")
 	}
 	if file == "" {
-		return nil, errors.New("packages: empty file path")
+		return nil, MissingInputError("file", "package file path is required")
 	}
 	manifest, h, err := s.IO.Read(file)
 	if err != nil {
-		return nil, fmt.Errorf("packages: inspect: %w", err)
+		return nil, WrapError(CodePackageInvalidManifest, err,
+			"read package: "+err.Error(),
+			map[string]any{"file": file})
 	}
 	defer h.Close()
 	return &model.PackageDetail{
@@ -91,8 +93,16 @@ func (s *Packages) Uninstall(ctx context.Context, name string) error {
 	if s.Agents == nil {
 		return errors.New("packages: missing agents repo")
 	}
+	if name == "" {
+		return MissingInputError("name", "agent name is required for uninstall")
+	}
 	if err := s.Agents.Delete(name); err != nil {
-		return fmt.Errorf("packages: uninstall %q: %w", name, err)
+		if errors.Is(err, agentstore.ErrNotFound) {
+			return AgentNotFoundError(name, err)
+		}
+		return WrapError(CodeIOFailure, err,
+			"uninstall agent: "+err.Error(),
+			map[string]any{"name": name})
 	}
 	return nil
 }
@@ -102,9 +112,14 @@ func (s *Packages) Install(ctx context.Context, req model.InstallRequest) (*mode
 	if s.IO == nil || s.Agents == nil || s.Caps == nil {
 		return nil, errors.New("packages: missing dependencies")
 	}
+	if req.Source == "" {
+		return nil, MissingInputError("source", "package file path or registry slug is required")
+	}
 	manifest, h, err := s.IO.Read(req.Source)
 	if err != nil {
-		return nil, fmt.Errorf("packages: install: %w", err)
+		return nil, WrapError(CodePackageInvalidManifest, err,
+			"read package: "+err.Error(),
+			map[string]any{"source": req.Source})
 	}
 	defer h.Close()
 
@@ -124,12 +139,16 @@ func (s *Packages) Install(ctx context.Context, req model.InstallRequest) (*mode
 	for _, blob := range manifest.Capabilities {
 		rc, err := h.Open(blob.Path)
 		if err != nil {
-			return result, fmt.Errorf("packages: install: open %q: %w", blob.Path, err)
+			return result, WrapError(CodePackageInvalidManifest, err,
+				fmt.Sprintf("open capability blob %q: %v", blob.Path, err),
+				map[string]any{"path": blob.Path})
 		}
 		payload, rerr := io.ReadAll(rc)
 		_ = rc.Close()
 		if rerr != nil {
-			return result, fmt.Errorf("packages: install: read %q: %w", blob.Path, rerr)
+			return result, WrapError(CodeIOFailure, rerr,
+				fmt.Sprintf("read capability %q: %v", blob.Path, rerr),
+				map[string]any{"path": blob.Path})
 		}
 		rec := model.CapabilityRecord{
 			Kind:       blob.Kind,
@@ -139,7 +158,9 @@ func (s *Packages) Install(ctx context.Context, req model.InstallRequest) (*mode
 		}
 		id, err := s.Caps.Add(rec, bytes.NewReader(payload))
 		if err != nil {
-			return result, fmt.Errorf("packages: install: import %q: %w", blob.Name, err)
+			return result, WrapError(CodeIOFailure, err,
+				fmt.Sprintf("import capability %q: %v", blob.Name, err),
+				map[string]any{"name": blob.Name, "kind": string(blob.Kind)})
 		}
 		capIDs[capKey{blob.Kind, blob.Name}] = id
 		result.ImportedCaps = append(result.ImportedCaps, id)
@@ -149,16 +170,22 @@ func (s *Packages) Install(ctx context.Context, req model.InstallRequest) (*mode
 	for _, ar := range manifest.Agents {
 		rc, err := h.Open(ar.Path)
 		if err != nil {
-			return result, fmt.Errorf("packages: install: open %q: %w", ar.Path, err)
+			return result, WrapError(CodePackageInvalidManifest, err,
+				fmt.Sprintf("open agent %q: %v", ar.Path, err),
+				map[string]any{"path": ar.Path})
 		}
 		data, rerr := io.ReadAll(rc)
 		_ = rc.Close()
 		if rerr != nil {
-			return result, fmt.Errorf("packages: install: read %q: %w", ar.Path, rerr)
+			return result, WrapError(CodeIOFailure, rerr,
+				fmt.Sprintf("read agent %q: %v", ar.Path, rerr),
+				map[string]any{"path": ar.Path})
 		}
 		var agent model.Agent
 		if uerr := yaml.Unmarshal(data, &agent); uerr != nil {
-			return result, fmt.Errorf("packages: install: parse %q: %w", ar.Path, uerr)
+			return result, WrapError(CodePackageInvalidManifest, uerr,
+				fmt.Sprintf("parse agent %q: %v", ar.Path, uerr),
+				map[string]any{"path": ar.Path})
 		}
 		// Rewrite CapabilityRef IDs to local store IDs when we just
 		// imported a matching (kind, name). Package authors typically
@@ -178,18 +205,19 @@ func (s *Packages) Install(ctx context.Context, req model.InstallRequest) (*mode
 		if exists {
 			switch req.Resolution {
 			case model.ResolveAsk:
-				if req.NonInteractive {
-					return result, fmt.Errorf("packages: install: agent %q exists and resolution is ask in non-interactive mode: %w", target, agentstore.ErrConflict)
-				}
-				return result, fmt.Errorf("packages: install: agent %q exists; pass --resolution: %w", target, agentstore.ErrConflict)
+				return result, AgentConflictError(target,
+					fmt.Sprintf("agent %q exists; pass --on-conflict {rename|skip|overwrite|cancel}", target))
 			case model.ResolveCancel:
-				return result, fmt.Errorf("packages: install: cancelled on conflict for %q: %w", target, agentstore.ErrConflict)
+				return result, AgentConflictError(target,
+					fmt.Sprintf("install cancelled: agent %q already exists", target))
 			case model.ResolveSkip:
 				result.Skipped = append(result.Skipped, target)
 				continue
 			case model.ResolveOverwrite:
 				if err := withOverwrite(s.Agents, true, func() error { return s.Agents.Save(&agent) }); err != nil {
-					return result, fmt.Errorf("packages: install: save %q: %w", target, err)
+					return result, WrapError(CodeIOFailure, err,
+						fmt.Sprintf("save agent %q (overwrite): %v", target, err),
+						map[string]any{"name": target})
 				}
 				result.InstalledAgents = append(result.InstalledAgents, target)
 				continue
@@ -197,24 +225,30 @@ func (s *Packages) Install(ctx context.Context, req model.InstallRequest) (*mode
 				newName := nextAvailableName(s.Agents, target)
 				agent.Identity.Name = newName
 				if err := agent.Validate(); err != nil {
-					return result, fmt.Errorf("packages: install: rename %q -> %q: %w", target, newName, err)
+					return result, validationError(newName, err)
 				}
 				if err := s.Agents.Save(&agent); err != nil {
-					return result, fmt.Errorf("packages: install: save renamed %q: %w", newName, err)
+					return result, WrapError(CodeIOFailure, err,
+						fmt.Sprintf("save renamed %q: %v", newName, err),
+						map[string]any{"old": target, "new": newName})
 				}
 				result.Renamed[target] = newName
 				result.InstalledAgents = append(result.InstalledAgents, newName)
 				continue
 			default:
-				return result, fmt.Errorf("packages: install: unknown resolution %q", req.Resolution)
+				return result, NewError(CodeValidation,
+					fmt.Sprintf("unknown conflict resolution %q", req.Resolution),
+					map[string]any{"resolution": string(req.Resolution)})
 			}
 		}
 
 		if err := agent.Validate(); err != nil {
-			return result, fmt.Errorf("packages: install: validate %q: %w", target, err)
+			return result, validationError(target, err)
 		}
 		if err := s.Agents.Save(&agent); err != nil {
-			return result, fmt.Errorf("packages: install: save %q: %w", target, err)
+			return result, WrapError(CodeIOFailure, err,
+				fmt.Sprintf("save agent %q: %v", target, err),
+				map[string]any{"name": target})
 		}
 		result.InstalledAgents = append(result.InstalledAgents, target)
 	}
@@ -229,16 +263,23 @@ func (s *Packages) Export(ctx context.Context, req model.ExportRequest) (*model.
 		return nil, errors.New("packages: missing dependencies")
 	}
 	if req.Agent == "" {
-		return nil, errors.New("packages: export: empty agent name")
+		return nil, MissingInputError("agent", "agent name is required for export")
 	}
 	agent, err := s.Agents.Get(req.Agent)
 	if err != nil {
-		return nil, fmt.Errorf("packages: export %q: %w", req.Agent, err)
+		if errors.Is(err, agentstore.ErrNotFound) {
+			return nil, AgentNotFoundError(req.Agent, err)
+		}
+		return nil, WrapError(CodeIOFailure, err,
+			"load agent: "+err.Error(),
+			map[string]any{"agent": req.Agent})
 	}
 
 	agentYAML, err := yaml.Marshal(agent)
 	if err != nil {
-		return nil, fmt.Errorf("packages: export: marshal: %w", err)
+		return nil, WrapError(CodeIOFailure, err,
+			"marshal agent: "+err.Error(),
+			map[string]any{"agent": req.Agent})
 	}
 
 	// Build a payload zip with the agent file and (optionally) caps.
@@ -247,9 +288,9 @@ func (s *Packages) Export(ctx context.Context, req model.ExportRequest) (*model.
 
 	agentPath := "agents/" + agent.Identity.Name + ".yaml"
 	if w, werr := zw.Create(agentPath); werr != nil {
-		return nil, werr
+		return nil, WrapError(CodeIOFailure, werr, "zip create: "+werr.Error(), nil)
 	} else if _, werr := w.Write(agentYAML); werr != nil {
-		return nil, werr
+		return nil, WrapError(CodeIOFailure, werr, "zip write: "+werr.Error(), nil)
 	}
 
 	manifest := &model.PackageManifest{
@@ -278,19 +319,23 @@ func (s *Packages) Export(ctx context.Context, req model.ExportRequest) (*model.
 			}
 			rec, err := s.Caps.Get(ref.ID)
 			if err != nil {
-				return fmt.Errorf("export: capability %s: %w", ref.ID, err)
+				return WrapError(CodeCapabilityNotFound, err,
+					fmt.Sprintf("capability %s: %v", ref.ID, err),
+					map[string]any{"id": string(ref.ID)})
 			}
 			payload, name, err := readCapPayload(s.Caps, ref.ID, rec.Kind)
 			if err != nil {
-				return err
+				return WrapError(CodeIOFailure, err,
+					fmt.Sprintf("read capability payload %s: %v", ref.ID, err),
+					map[string]any{"id": string(ref.ID)})
 			}
 			capPath := "capabilities/" + string(rec.Kind) + "/" + name
 			cw, werr := zw.Create(capPath)
 			if werr != nil {
-				return werr
+				return WrapError(CodeIOFailure, werr, "zip create: "+werr.Error(), nil)
 			}
 			if _, werr := cw.Write(payload); werr != nil {
-				return werr
+				return WrapError(CodeIOFailure, werr, "zip write: "+werr.Error(), nil)
 			}
 			sum := sha256.Sum256(payload)
 			manifest.Capabilities = append(manifest.Capabilities, model.PackageCapBlob{
@@ -304,14 +349,14 @@ func (s *Packages) Export(ctx context.Context, req model.ExportRequest) (*model.
 		return nil
 	}
 	if err := gather(agent.Skills, req.IncludeSkills); err != nil {
-		return nil, fmt.Errorf("packages: %w", err)
+		return nil, err
 	}
 	if err := gather(agent.MCP, req.IncludeMCP); err != nil {
-		return nil, fmt.Errorf("packages: %w", err)
+		return nil, err
 	}
 
 	if err := zw.Close(); err != nil {
-		return nil, err
+		return nil, WrapError(CodeIOFailure, err, "zip close: "+err.Error(), nil)
 	}
 
 	dst := req.OutputPath
@@ -319,7 +364,9 @@ func (s *Packages) Export(ctx context.Context, req model.ExportRequest) (*model.
 		dst = agent.Identity.Name + ".avm.zip"
 	}
 	if err := s.IO.Write(manifest, bytes.NewReader(payloadBuf.Bytes()), dst); err != nil {
-		return nil, fmt.Errorf("packages: export: write: %w", err)
+		return nil, WrapError(CodeIOFailure, err,
+			"write package: "+err.Error(),
+			map[string]any{"path": dst})
 	}
 	return &model.ExportResult{Manifest: *manifest, Path: dst}, nil
 }

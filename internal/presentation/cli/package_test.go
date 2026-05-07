@@ -63,7 +63,7 @@ func TestPackageInstall_NonInteractive(t *testing.T) {
 		},
 	}
 	deps := newTestDeps(nil, pkgs, nil, nil, nil)
-	out, _, err := runCmd(t, deps, "--non-interactive", "package", "install", "demo.avm.zip")
+	out, _, err := runCmd(t, deps, "package", "install", "demo.avm.zip")
 	if err != nil {
 		t.Fatalf("execute: %v", err)
 	}
@@ -93,7 +93,7 @@ func TestPackageExport(t *testing.T) {
 func TestPackageUninstall_NonInteractive(t *testing.T) {
 	pkgs := &fakePackages{}
 	deps := newTestDeps(nil, pkgs, nil, nil, nil)
-	out, _, err := runCmd(t, deps, "--non-interactive", "package", "uninstall", "alpha")
+	out, _, err := runCmd(t, deps, "package", "uninstall", "alpha", "--yes")
 	if err != nil {
 		t.Fatalf("execute: %v", err)
 	}

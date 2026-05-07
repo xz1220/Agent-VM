@@ -226,16 +226,14 @@ func TestAgents_Delete_NonInteractiveRequiresConfirm(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 	err := s.Delete(context.Background(), model.DeleteAgentRequest{
-		Name:           "alpha",
-		NonInteractive: true,
+		Name: "alpha",
 	})
 	if err == nil {
-		t.Fatal("expected error without --confirm")
+		t.Fatal("expected error without Confirm=true")
 	}
 	if err := s.Delete(context.Background(), model.DeleteAgentRequest{
-		Name:           "alpha",
-		NonInteractive: true,
-		Confirm:        true,
+		Name:    "alpha",
+		Confirm: true,
 	}); err != nil {
 		t.Fatalf("Delete with confirm: %v", err)
 	}

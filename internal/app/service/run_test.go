@@ -129,7 +129,7 @@ func TestRunner_ResolveRuntime_MultipleRequiresFlag(t *testing.T) {
 	})
 	driver := &fakeDriver{name: "a"}
 	r := NewRunner(repo, registryWith(t, driver), &fakeWriter{}, &fakeProcess{}, &fakeLog{})
-	_, err := r.Preview(context.Background(), model.RunRequest{Agent: "alpha", NonInteractive: true})
+	_, err := r.Preview(context.Background(), model.RunRequest{Agent: "alpha"})
 	if err == nil {
 		t.Fatal("expected error for multi-runtime non-interactive")
 	}
@@ -212,7 +212,48 @@ func TestRunner_Run_AppliesAndLogs(t *testing.T) {
 	}
 }
 
-func TestRunner_Run_DriftKeepsAndApplies(t *testing.T) {
+// With DriftAsk (default) and drift detected, Run must reject — this is
+// the new plumbing-style gate. Caller must pass --drift to proceed.
+func TestRunner_Run_DriftAskRejects(t *testing.T) {
+	repo := agentstore.New(t.TempDir())
+	mkAgentInRepo(t, repo, "alpha", []model.RuntimePref{{Runtime: "fake"}})
+	driver := &fakeDriver{
+		name:   "fake",
+		plan:   defaultPlan(),
+		bnd:    runtime.Boundary{StateDir: "/tmp/avm-state"},
+		launch: runtime.LaunchSpec{Bin: "/usr/bin/true"},
+	}
+	w := &fakeWriter{
+		dryRunResult: []model.DiffEntry{{Path: "/tmp/avm-test/managedfile", Reason: "updated"}},
+	}
+	log := &fakeLog{}
+	r := NewRunner(repo, registryWith(t, driver), w, &fakeProcess{}, log)
+	_, err := r.Run(context.Background(), model.RunRequest{Agent: "alpha"})
+	if err == nil {
+		t.Fatal("expected drift-detected error with DriftAsk")
+	}
+	se := AsError(err)
+	if se == nil {
+		t.Fatalf("want *Error, got %T %v", err, err)
+	}
+	if se.Code != CodeDriftDetected {
+		t.Fatalf("want CodeDriftDetected, got %s", se.Code)
+	}
+	entries, ok := se.Details["entries"].([]model.DiffEntry)
+	if !ok || len(entries) == 0 {
+		t.Fatalf("want details.entries populated, got %+v", se.Details)
+	}
+	// Must NOT have applied or logged a run on a rejected attempt.
+	if w.applyCount != 0 {
+		t.Fatalf("apply should not be called when drift gate rejects, got %d", w.applyCount)
+	}
+	if len(log.records) != 0 {
+		t.Fatalf("no run log expected on drift rejection, got %+v", log.records)
+	}
+}
+
+// With DriftKeep explicitly set, Run proceeds and writes the run log.
+func TestRunner_Run_DriftKeepProceeds(t *testing.T) {
 	repo := agentstore.New(t.TempDir())
 	mkAgentInRepo(t, repo, "alpha", []model.RuntimePref{{Runtime: "fake"}})
 	driver := &fakeDriver{
@@ -227,8 +268,8 @@ func TestRunner_Run_DriftKeepsAndApplies(t *testing.T) {
 	log := &fakeLog{}
 	r := NewRunner(repo, registryWith(t, driver), w, &fakeProcess{}, log)
 	_, err := r.Run(context.Background(), model.RunRequest{
-		Agent:          "alpha",
-		NonInteractive: true,
+		Agent:       "alpha",
+		DriftPolicy: model.DriftKeep,
 	})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
