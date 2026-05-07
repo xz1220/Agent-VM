@@ -26,11 +26,11 @@
 |---|---|---|
 | **AVM 把 Agent 渲染为 runtime managed config** | 用户 config 在 `${CODEX_HOME}/config.toml`，项目 config 在 `.codex/config.toml`，都是 TOML。AVM 可以写入。 | **可行**。 |
 | **Agent 绑定 instructions** | Codex 有 `AGENTS.md`（从 `CODEX_HOME` 和项目树发现）+ developer instructions。AVM 可以 map 到 AGENTS.md 或直接注入 config。 | **可行**。 |
-| **Agent 绑定 skills（含来源区分）** | Skills 从 6 个 root 发现：项目 `.codex/skills`、`CODEX_HOME/skills`、user `~/.agents/skills`、bundled system、admin `/etc/codex/skills`、repo `.agents/skills`、configured extras、plugin roots。每个 skill 在 loader 里带 scope rank，plugin skill 还会加 namespace。 | **可行但有坑**。来源字段是现成的，但 AVM 要自己决定同名 skill 怎么合并/展示。 |
-| **Agent 绑定 MCP servers（含来源区分）** | MCP 来自：config entry、plugin manifest、skill dependency 自动安装（feature-gated，只允许 first-party）。`codex mcp add` 会直接写 global config。 | **可行但有坑**。"skill 声明依赖自动装 MCP"这条路径是 Codex 自己的行为，AVM 如果也在同一个 config 里写 MCP，要约定谁是 source of truth。 |
+| **Agent 绑定 skills（含来源区分）** | Skills 从 6 个 root 发现：项目 `.codex/skills`、`CODEX_HOME/skills`、user `~/.agents/skills`、bundled system、admin `/etc/codex/skills`、repo `.agents/skills`、configured extras、plugin roots。每个 skill 在 loader 里带 scope rank，plugin skill 还会加 namespace。 | **可行**。Codex 提供的 scope rank + plugin namespace 正好满足 PRD 4.2 对来源区分的要求。 |
+| **Agent 绑定 MCP servers（含来源区分）** | MCP 来自：config entry、plugin manifest、skill dependency 自动安装（feature-gated，只允许 first-party）。`codex mcp add` 会直接写 global config。 | **有坑**。skill-dep 自动装 MCP 会往 `${CODEX_HOME}/config.toml` 写 AVM 不知道的键，导致 Agent 定义与 managed config 分叉；用户也可能直接编辑 config。需要在 `run` 启动/退出做对齐（PRD 4.4）。 |
 | **Runtime mapping 状态：native / rendered_as_instructions / ignored / unsupported** | instructions、skills、MCP 三类都有 native 字段。sandbox/approval 拆成 5 维，Codex adapter 把这 5 个维度各自当一个 native 字段即可。 | **可行**。四种状态都有地方落。 |
 | **全量发现 skills/MCP（包括 runtime 全局目录里非 AVM 管理的）** | Skills loader 每次都扫全部 root；MCP 也是 config + plugin + skill-dep 的实时合并。AVM 只要在 create/edit 时调用类似的扫描逻辑即可。 | **可行**。 |
-| **AVM 不能静默覆盖 runtime 全局能力** | Codex 的 skill loader 按 scope 排序、不互删；`codex mcp add` 是显式写 global config。AVM 只要不主动改 `${CODEX_HOME}/skills/.system` 或 user config 里不属于它的键，就安全。 | **可行**。 |
+| **AVM 不能静默覆盖 runtime 全局能力** | Codex 的 skill loader 按 scope 排序、不互删；`codex mcp add` 是显式写 global config。在独立 `CODEX_HOME` 方案下 AVM 只写 Agent 私有目录，根本不碰 user `~/.codex`。 | **可行**。独立 `CODEX_HOME` 天然解决。 |
 | **agent/runtime 隔离边界（不含 memory）** | 硬隔离只能靠切 `CODEX_HOME`（env var 支持）。切了之后 config、auth、history、rollout、state DB、memory 全部跟着走，正好对应 PRD 要的 per-(Agent, runtime) 私有 boundary。 | **可行**。新 `CODEX_HOME` 要复制一份 user 级 `auth.json` 过去，否则每个 Agent 第一次运行都要重新 `codex login`。 |
 | **Package 导入导出** | Codex plugin 有独立的 marketplace/cache/manifest 三层结构，plugin 能携带 skills + MCP + apps。语义上比 AVM package 更重。 | **有坑**。AVM package 可以不走 Codex plugin 体系，自己渲染；但如果想导出成 Codex 能直接认的 plugin，要对齐 manifest schema。 |
 | **Memory 只做隔离不做内容管理** | Codex memory 是主动子系统：建 `CODEX_HOME/memories` 目录、加入 writable roots、起后台 job 写 DB `stage1_outputs` 和 `raw_memories.md`。不是被动 context。 | **有坑**。"不管 memory"≠"不发生 memory"。AVM 要知道只要用 Codex，memory 子系统就在跑。想不让它跑要显式禁用（feature flag 或 ephemeral session）。 |
@@ -254,7 +254,7 @@ session 把这三路合并成 effective list，交给 `McpConnectionManager`（`
 
 1. **PRD 2.3（能力边界）/ 4.2（全量发现）**：Codex 没有"单一 registry"。skills、MCP、plugin、app、skill-dep 各走各的路径。AVM 要自己定义合并和展示规则。
 
-2. **PRD 4.2（不能静默接管）**：Codex 的 `codex mcp add` 会改 user config；skill-dep 自动安装 MCP 也会改 user config。AVM 如果和 Codex CLI 并存，要约定谁写什么键，否则会互相覆盖。
+2. **PRD 4.4（Agent 定义 vs managed config 对齐）**：skill-dep 自动装 MCP、`codex mcp add`、用户直接编辑 config.toml 都会让 Agent 私有 `CODEX_HOME/config.toml` 与 AVM 的 Agent 定义产生 drift。独立 `CODEX_HOME` 只解决了"不污染 user 全局 config"，没解决"AVM 侧的单一真相源"问题。PRD 4.4 已加对齐原则（run 启动/退出时核对差异并让用户决定），具体机制待定。
 
 3. **PRD 4.4（运行透明）**：Codex 命令级 approval 不持久化，下次启动就重问一遍。PRD 要展示"哪些 runtime 已就绪"的时候，approval 状态不能缓存到 AVM 侧当成 durable 属性。
 
