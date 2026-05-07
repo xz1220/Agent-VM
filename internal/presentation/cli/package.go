@@ -10,7 +10,6 @@ import (
 
 	"github.com/xz1220/agent-vm/internal/app/model"
 	"github.com/xz1220/agent-vm/internal/app/service"
-	"github.com/xz1220/agent-vm/internal/infra/agentstore"
 )
 
 func newPackageCmd(deps Deps) *cobra.Command {
@@ -112,7 +111,7 @@ func newPackageInstallCmd(deps Deps) *cobra.Command {
 					}
 					return renderInstallResult(c.OutOrStdout(), res)
 				}
-				if !isInteractive(g) || !errors.Is(err, agentstore.ErrConflict) {
+				if !isInteractive(g) || !errors.Is(err, service.ErrAgentConflict) {
 					return err
 				}
 				// Interactive prompt for resolution.

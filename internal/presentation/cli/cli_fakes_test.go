@@ -5,7 +5,7 @@ import (
 	"errors"
 
 	"github.com/xz1220/agent-vm/internal/app/model"
-	"github.com/xz1220/agent-vm/internal/infra/agentstore"
+	"github.com/xz1220/agent-vm/internal/app/service"
 )
 
 // fakeAgents is a test-only AgentService implementing the methods the
@@ -37,7 +37,7 @@ func (f *fakeAgents) Create(ctx context.Context, req model.CreateAgentRequest) (
 		case model.ResolveOverwrite:
 			// fall through
 		default:
-			return nil, agentstore.ErrConflict
+			return nil, service.ErrAgentConflict
 		}
 	}
 	a := &model.Agent{
@@ -73,7 +73,7 @@ func (f *fakeAgents) List(ctx context.Context) ([]model.AgentSummary, error) {
 func (f *fakeAgents) Show(ctx context.Context, name string) (*model.AgentDetail, error) {
 	d, ok := f.agents[name]
 	if !ok {
-		return nil, agentstore.ErrNotFound
+		return nil, service.ErrAgentNotFound
 	}
 	return d, nil
 }
@@ -82,7 +82,7 @@ func (f *fakeAgents) Edit(ctx context.Context, req model.EditAgentRequest) (*mod
 	f.editCalls = append(f.editCalls, req)
 	d, ok := f.agents[req.Name]
 	if !ok {
-		return nil, agentstore.ErrNotFound
+		return nil, service.ErrAgentNotFound
 	}
 	if req.Identity != nil {
 		ident := *req.Identity
@@ -109,7 +109,7 @@ func (f *fakeAgents) Delete(ctx context.Context, req model.DeleteAgentRequest) e
 		return errors.New("confirm required")
 	}
 	if _, ok := f.agents[req.Name]; !ok {
-		return agentstore.ErrNotFound
+		return service.ErrAgentNotFound
 	}
 	delete(f.agents, req.Name)
 	f.deleted = append(f.deleted, req.Name)
@@ -119,10 +119,10 @@ func (f *fakeAgents) Delete(ctx context.Context, req model.DeleteAgentRequest) e
 func (f *fakeAgents) Clone(ctx context.Context, name, newName string) (*model.Agent, error) {
 	d, ok := f.agents[name]
 	if !ok {
-		return nil, agentstore.ErrNotFound
+		return nil, service.ErrAgentNotFound
 	}
 	if _, exists := f.agents[newName]; exists {
-		return nil, agentstore.ErrConflict
+		return nil, service.ErrAgentConflict
 	}
 	clone := d.Agent
 	clone.Identity.Name = newName
@@ -133,10 +133,10 @@ func (f *fakeAgents) Clone(ctx context.Context, name, newName string) (*model.Ag
 func (f *fakeAgents) Rename(ctx context.Context, oldName, newName string) (*model.Agent, error) {
 	d, ok := f.agents[oldName]
 	if !ok {
-		return nil, agentstore.ErrNotFound
+		return nil, service.ErrAgentNotFound
 	}
 	if _, exists := f.agents[newName]; exists {
-		return nil, agentstore.ErrConflict
+		return nil, service.ErrAgentConflict
 	}
 	clone := d.Agent
 	clone.Identity.Name = newName

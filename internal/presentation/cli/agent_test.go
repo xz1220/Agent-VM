@@ -8,6 +8,7 @@ import (
 
 	"github.com/xz1220/agent-vm/internal/app/model"
 	"github.com/xz1220/agent-vm/internal/app/service"
+	"github.com/xz1220/agent-vm/internal/infra/home"
 )
 
 func newTestDeps(agents *fakeAgents, pkgs *fakePackages, runner *fakeRunner, caps *fakeCaps, diag *fakeDiagnostics) Deps {
@@ -26,12 +27,19 @@ func newTestDeps(agents *fakeAgents, pkgs *fakePackages, runner *fakeRunner, cap
 	if diag == nil {
 		diag = &fakeDiagnostics{}
 	}
+	// Build a real SystemService so init/uninstall/shell tests exercise
+	// the actual service path. The Layout honors $AVM_HOME via
+	// home.DefaultLayout, which tests typically t.Setenv before calling
+	// newTestDeps. Tests that don't touch System (most agent/run/pkg
+	// cases) never hit this surface and don't care about the layout.
+	layout, _ := home.DefaultLayout()
 	return Deps{Services: service.Container{
 		Agents:       agents,
 		Run:          runner,
 		Packages:     pkgs,
 		Capabilities: caps,
 		Diagnostics:  diag,
+		System:       service.NewSystem(layout),
 	}}
 }
 

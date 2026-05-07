@@ -8,8 +8,6 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-
-	"github.com/xz1220/agent-vm/internal/infra/home"
 )
 
 func newInitCmd(deps Deps) *cobra.Command {
@@ -17,28 +15,16 @@ func newInitCmd(deps Deps) *cobra.Command {
 		Use:   "init",
 		Short: "Initialize ~/.avm",
 		RunE: func(c *cobra.Command, args []string) error {
-			layout, err := home.DefaultLayout()
+			res, err := deps.Services.System.Init(c.Context())
 			if err != nil {
 				return err
 			}
-			// If the root already exists with at least one of our subdirs,
-			// treat as already initialised.
-			if _, statErr := os.Stat(layout.AgentsDir()); statErr == nil {
-				fmt.Fprintf(c.OutOrStdout(), "already initialized at %s\n", layout.Root)
+			if res.AlreadyExists {
+				fmt.Fprintf(c.OutOrStdout(), "already initialized at %s\n", res.Root)
 				return nil
 			}
-			if err := layout.EnsureDirs(); err != nil {
-				return err
-			}
 			fmt.Fprintln(c.OutOrStdout(), "Created:")
-			for _, p := range []string{
-				layout.Root,
-				layout.AgentsDir(),
-				layout.CapabilitiesDir(),
-				layout.PackagesDir(),
-				layout.RunLogDir(),
-				layout.BoundaryDir(),
-			} {
+			for _, p := range res.CreatedPaths {
 				fmt.Fprintf(c.OutOrStdout(), "  %s\n", p)
 			}
 			return nil
@@ -93,26 +79,30 @@ func newUninstallCmd(deps Deps) *cobra.Command {
 		Use:   "uninstall",
 		Short: "Uninstall AVM (binary / shell integration / data)",
 		RunE: func(c *cobra.Command, args []string) error {
-			layout, err := home.DefaultLayout()
-			if err != nil {
-				return err
-			}
 			binPath, _ := os.Executable()
 			if binPath == "" {
 				binPath = os.Args[0]
 			}
 			if !yes {
+				root, err := deps.Services.System.HomeRoot(c.Context())
+				if err != nil {
+					return err
+				}
 				fmt.Fprintln(c.OutOrStdout(), "Would remove:")
 				fmt.Fprintf(c.OutOrStdout(), "  binary:        %s\n", binPath)
-				fmt.Fprintf(c.OutOrStdout(), "  AVM home:      %s\n", layout.Root)
+				fmt.Fprintf(c.OutOrStdout(), "  AVM home:      %s\n", root)
 				fmt.Fprintln(c.OutOrStdout(), "Re-run with --yes to apply.")
 				return nil
 			}
-			// Be surgical: only remove if writeable.
-			if err := os.RemoveAll(layout.Root); err != nil {
-				return fmt.Errorf("remove home: %w", err)
+			res, err := deps.Services.System.UninstallHome(c.Context())
+			if err != nil {
+				return err
 			}
-			fmt.Fprintf(c.OutOrStdout(), "Removed %s\n", layout.Root)
+			if res.Removed {
+				fmt.Fprintf(c.OutOrStdout(), "Removed %s\n", res.Root)
+			} else {
+				fmt.Fprintf(c.OutOrStdout(), "AVM home %s not present; nothing to remove.\n", res.Root)
+			}
 			if err := os.Remove(binPath); err != nil {
 				if os.IsPermission(err) {
 					fmt.Fprintf(c.OutOrStdout(), "Could not remove binary at %s (permission denied); remove manually.\n", binPath)
@@ -152,25 +142,12 @@ func detectShell() (string, error) {
 	case "bash", "zsh", "fish":
 		return base, nil
 	}
-	// Best effort: take the prefix before any version suffix.
 	for _, k := range []string{"bash", "zsh", "fish"} {
 		if strings.HasPrefix(base, k) {
 			return k, nil
 		}
 	}
 	return "", fmt.Errorf("shell: unsupported shell %q", base)
-}
-
-func shellCompletionPath(shellName string) (string, error) {
-	layout, err := home.DefaultLayout()
-	if err != nil {
-		return "", err
-	}
-	dir := filepath.Join(layout.Root, "shell")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, "avm-completion."+shellName), nil
 }
 
 func newShellInstallCmd(deps Deps) *cobra.Command {
@@ -187,7 +164,7 @@ func newShellInstallCmd(deps Deps) *cobra.Command {
 				}
 				shell = s
 			}
-			path, err := shellCompletionPath(shell)
+			path, err := deps.Services.System.CompletionPath(c.Context(), shell)
 			if err != nil {
 				return err
 			}
@@ -210,14 +187,7 @@ func newShellInstallCmd(deps Deps) *cobra.Command {
 			}
 			fmt.Fprintf(c.OutOrStdout(), "Wrote %s\n", path)
 			fmt.Fprintf(c.OutOrStdout(), "Add this line to your %s rc file:\n", shell)
-			switch shell {
-			case "bash":
-				fmt.Fprintf(c.OutOrStdout(), "  source %s\n", path)
-			case "zsh":
-				fmt.Fprintf(c.OutOrStdout(), "  source %s\n", path)
-			case "fish":
-				fmt.Fprintf(c.OutOrStdout(), "  source %s\n", path)
-			}
+			fmt.Fprintf(c.OutOrStdout(), "  source %s\n", path)
 			return nil
 		},
 	}
@@ -239,15 +209,17 @@ func newShellUninstallCmd(deps Deps) *cobra.Command {
 				}
 				shell = s
 			}
-			path, err := shellCompletionPath(shell)
+			// Compute the path through the service, then delete via the
+			// service. CLI never touches infra paths directly.
+			path, err := deps.Services.System.CompletionPath(c.Context(), shell)
 			if err != nil {
 				return err
 			}
-			if err := os.Remove(path); err != nil {
-				if errors.Is(err, os.ErrNotExist) {
-					fmt.Fprintf(c.OutOrStdout(), "(nothing to remove at %s)\n", path)
-					return nil
-				}
+			if _, statErr := os.Stat(path); errors.Is(statErr, os.ErrNotExist) {
+				fmt.Fprintf(c.OutOrStdout(), "(nothing to remove at %s)\n", path)
+				return nil
+			}
+			if err := deps.Services.System.RemoveCompletion(c.Context(), shell); err != nil {
 				return err
 			}
 			fmt.Fprintf(c.OutOrStdout(), "Removed %s\n", path)

@@ -75,6 +75,7 @@ func buildDeps() (cli.Deps, error) {
 		Packages:     service.NewPackages(agents, caps, pkgs),
 		Capabilities: service.NewCapabilities(caps, registry),
 		Diagnostics:  service.NewDiagnostics(agents, registry, log),
+		System:       service.NewSystem(layout),
 	}
 	return cli.Deps{Services: container}, nil
 }

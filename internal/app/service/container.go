@@ -10,4 +10,5 @@ type Container struct {
 	Packages     PackageService
 	Capabilities CapabilityService
 	Diagnostics  DiagnosticsService
+	System       SystemService
 }

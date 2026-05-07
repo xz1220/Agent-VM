@@ -10,7 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/xz1220/agent-vm/internal/app/model"
-	"github.com/xz1220/agent-vm/internal/infra/agentstore"
+	"github.com/xz1220/agent-vm/internal/app/service"
 	"github.com/xz1220/agent-vm/internal/presentation/render"
 )
 
@@ -202,7 +202,7 @@ func runAgentCreateInteractive(ctx context.Context, out io.Writer, deps Deps, f 
 			fmt.Fprintf(out, "Created agent %q\n", a.Identity.Name)
 			return nil
 		}
-		if !errors.Is(err, agentstore.ErrConflict) {
+		if !errors.Is(err, service.ErrAgentConflict) {
 			return err
 		}
 		choice, perr := promptSelect(fmt.Sprintf("Agent %q exists; resolve?", req.Name),
@@ -305,7 +305,7 @@ func agentExists(deps Deps, name string) (bool, error) {
 	if err == nil {
 		return true, nil
 	}
-	if errors.Is(err, agentstore.ErrNotFound) {
+	if errors.Is(err, service.ErrAgentNotFound) {
 		return false, nil
 	}
 	// Wrapped/text fallback for older Show paths.
