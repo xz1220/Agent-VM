@@ -10,9 +10,9 @@
 
 3. Claude Code **没有统一 extension registry**。Skills 来自 7 个来源（managed/user/project/additional dirs/plugin/bundled/MCP），MCP 来自 8 个 scope（enterprise/local/project/user/plugin/dynamic/managed/Claude.ai）。PRD 说的"全量发现"在 Claude Code 这里是**多源合并**，且每个来源都有自己的 trust/approval 闸口。
 
-4. Claude Code 的**隔离不是一个开关**。默认 sandbox `enabled: false`，落地的隔离能力分散在四个正交维度：permission rules（tool allow/deny）、filesystem path classifier（敏感路径硬拦截）、可选的 `@anthropic-ai/sandbox-runtime`（平台依赖、默认关）、subprocess 边界（每条 shell 命令一个进程）。PRD 把 sandbox 当一个 mapping 字段会丢语义（`src/utils/sandbox/sandbox-adapter.ts:459`、`532`，`src/utils/permissions/permissions.ts:473`，`src/utils/Shell.ts:177`）。
+4. Claude Code 的**隔离不是一个开关**。默认 sandbox `enabled: false`，落地的隔离能力分散在四个正交维度：permission rules（tool allow/deny）、filesystem path classifier（敏感路径硬拦截）、可选的 `@anthropic-ai/sandbox-runtime`（平台依赖、默认关）、subprocess 边界（每条 shell 命令一个进程）。PRD 没把 sandbox 列为 Agent 字段，所以这不是 PRD 假设的冲突；但 adapter 想给用户透明展示"本次运行的隔离状态"时，单字段表达不了，要至少展开到这四维（`src/utils/sandbox/sandbox-adapter.ts:459`、`532`，`src/utils/permissions/permissions.ts:473`，`src/utils/Shell.ts:177`）。
 
-5. Claude Code 的状态边界**不止 `~/.claude`**。Global config 在 `~/.claude.json`（独立文件，不在 `.claude/` 里），plugin cache 可被 `CLAUDE_CODE_PLUGIN_CACHE_DIR` 改向，env-paths cache 走 XDG，secure storage 在非 macOS 上 fallback 到明文 `~/.claude/.credentials.json`。PRD 想做"AVM home"边界要意识到这是**多目录**而不是单点（`src/utils/env.ts:13`，`src/utils/plugins/pluginDirectories.ts:49`，`src/utils/cachePaths.ts:1`，`src/utils/secureStorage/plainTextStorage.ts:13`）。
+5. Claude Code 的状态边界**不止 `~/.claude`**。Global config 在 `~/.claude.json`（独立文件，不在 `.claude/` 里），plugin cache 可被 `CLAUDE_CODE_PLUGIN_CACHE_DIR` 改向，env-paths cache 走 XDG，secure storage 在非 macOS 上 fallback 到明文 `~/.claude/.credentials.json`。如果 AVM 想用 per-agent 独立目录实现 PRD §4.6 的 runtime memory isolation，要意识到这是**多目录**而不是单点（`src/utils/env.ts:13`，`src/utils/plugins/pluginDirectories.ts:49`，`src/utils/cachePaths.ts:1`，`src/utils/secureStorage/plainTextStorage.ts:13`）。
 
 6. Claude Code 的**项目身份是 canonical git root**，不是 cwd（`src/bootstrap/state.ts:45`、`496`，`src/memdir/paths.ts:198`-`205`）。这意味着同一个 Claude Code 实例下，多个 worktree 共享 auto-memory——这是 Claude Code 故意的（注释引 `anthropics/claude-code#24382`）。但 auto-memory 的 base 跟着 `CLAUDE_CONFIG_DIR` 走（`paths.ts:85-90` → `envUtils.ts:7-14`），AVM 给每个 agent 独立 `CLAUDE_CONFIG_DIR` 时 memory 自然分家，不冲突。
 
@@ -32,7 +32,7 @@
 | **Agent 绑定 instructions** | `CLAUDE.md` 多层加载（managed/user/project/`.claude/CLAUDE.md`/`.claude/rules/*.md`/local），支持 include 引用文件，上限 40000 字符。AVM 可以 map 到 user 或 project `CLAUDE.md`。 | **可行**。 |
 | **Agent 绑定 skills（含来源区分）** | Skills 从 7 个来源加载：managed、user `~/.claude/skills`、project `.claude/skills`、`--add-dir`、plugin、bundled（编译进 CLI）、MCP server 提供。`LoadedFrom` enum 自带来源字段。形态上 skill 必须是 `skills/<name>/SKILL.md`（不是单文件 markdown）。 | **可行但有坑**。来源现成，但 nested discovery（从操作文件向 cwd 走的过程中累加 `.claude/skills`）是 AVM 没设计过的发现路径。 |
 | **Agent 绑定 MCP servers（含来源区分）** | MCP 来自 8 个 scope：enterprise/local/project/user/plugin/dynamic/managed/Claude.ai。`mcp add` 命令按 `--scope` 写到不同位置（project 写 `.mcp.json`、user 写 global config、local 写 project config 块）。 | **可行但有坑**。Project 层的 `.mcp.json` 首次使用需要 user approve；plugin-only policy 会让所有非 plugin/enterprise MCP 失效。AVM 要决定写哪一层。 |
-| **Runtime mapping 状态：native / rendered_as_instructions / ignored / unsupported** | instructions、skills、MCP 都有 native 字段。permission/sandbox 是多维组合，AVM 单字段表达会降级到 partial native 或 rendered_as_instructions。 | **可行**。 |
+| **Runtime mapping 状态：native / rendered_as_instructions / ignored / unsupported** | PRD §3.1 列的 Agent 字段（identity / instructions / skills / MCP / runtime config）在 Claude Code 都有 native 落点（CLAUDE.md / skills / MCP / settings）。四态枚举可以正常表达。 | **可行**。 |
 | **全量发现 skills/MCP（包括 runtime 全局目录里非 AVM 管理的）** | Skills 每次都按 7 路扫；MCP 每次都按 scope 合并。AVM 在 create/edit 时调一次发现就能拿到全集。bare 模式会跳过自动发现，AVM 不要在 bare 模式下做 discovery。 | **可行**。 |
 | **AVM 不能静默覆盖 runtime 全局能力** | Skills loader 按 source 排序、realpath 去重、first-wins，不互删。MCP 不会神奇合并同名 server。AVM 只要不主动改不属于自己的键就安全。 | **可行**。 |
 | **agent/runtime 隔离边界（不含 memory）** | 硬隔离只能靠环境变量切目录：`CLAUDE_CONFIG_DIR` 改 settings 与 global config 根，`CLAUDE_CODE_PLUGIN_CACHE_DIR` 改 plugin cache，`CLAUDE_CODE_TMPDIR` 改临时目录。但有些路径（debug log、secure storage、env-paths cache）不一定都跟着 `CLAUDE_CONFIG_DIR` 走。 | **可行但有坑**。**没有一个总开关**能把所有 Claude Code 状态搬到隔离目录。 |
@@ -116,13 +116,15 @@ Managed settings 路径默认：
 
 **对 AVM 的含义**：
 - AVM 写 project `.claude/settings.json` 是合法的，但要么提示用户 trust，要么把关键内容（env、MCP）写到 user 层。
-- "AVM home"边界至少要管两个路径：`$CLAUDE_CONFIG_DIR`（默认 `~/.claude`）和 `$CLAUDE_CONFIG_DIR/.claude.json`。
+- 如果 AVM 用 per-agent `CLAUDE_CONFIG_DIR` 实现隔离，settings 与 global config（`~/.claude.json`）这两个路径都会跟着走，不需要分别管。
 
 ---
 
 ## 五、隔离模型
 
-PRD 单字段 sandbox 在 Claude Code 这里要展开成四个正交维度：
+> 说明：PRD 没规定 Agent 要带 sandbox 字段，所以本节只是 adapter 实现参考——告诉 AVM 想透明展示或控制 Claude Code 的隔离状态时，能动哪些钮。
+
+Claude Code 的隔离落地在四个正交维度：
 
 | 维度 | 取值 / 形态 | 源码 |
 |---|---|---|
@@ -166,8 +168,8 @@ PRD 单字段 sandbox 在 Claude Code 这里要展开成四个正交维度：
 - BashTool 决定是否要 sandbox：excluded commands 明确不是 security boundary（`shouldUseSandbox.ts:18`、`130`）。
 
 **对 AVM 的含义**：
-- AVM 想让 mapping status 表达"启用了沙箱"，至少要写 `permission.*` rules + `sandbox.enabled` + `--add-dir` 三处。单字段 sandbox 在这里只能 partial native。
-- AVM 想阻止 Claude Code 改用户敏感文件，即使不开 external sandbox，filesystem path classifier 已经在拦了；这是 PRD"不能静默覆盖 runtime 全局能力"的天然保护。
+- 即使不开 external sandbox，filesystem path classifier 已经会拦敏感路径（`.git`、`.claude`、shell rc files、`.mcp.json`），这是 PRD §4.2"不能静默覆盖 runtime 全局能力"的天然保护，AVM 不需要额外做什么。
+- 如果 AVM 后续要在 Agent schema 加可选的隔离配置（PRD 当前没要求），最少要管 `permission.*` rules + `sandbox.enabled` + `--add-dir` 三处才能在 Claude Code 上 round-trip。
 
 ---
 
@@ -341,43 +343,45 @@ PRD 明说"不管 memory"，这里重点提醒它**不是被动 context**：
 - OAuth token 存 secure storage `claudeAiOauth`（`auth.ts:1198`）；bare 模式跳过 OAuth（`auth.ts:1255`）。
 - Remote CCR token 路径 `/home/claude/.claude/remote/{.oauth_token,.api_key,.session_ingress_token}`（`authFileDescriptor.ts:13`、`30`）。
 
-**核心事实**：Claude Code 没有一个总开关把所有状态搬到隔离目录。PRD 想做"AVM home"边界，至少要同时管：
-- `CLAUDE_CONFIG_DIR`（settings + global config）
+**核心事实**：Claude Code 没有一个总开关把所有状态搬到隔离目录。如果 AVM 想用 per-agent 独立目录实现 PRD §4.6 的 runtime memory isolation，至少要同时管：
+- `CLAUDE_CONFIG_DIR`（settings + global config + auto-memory base + secure storage 明文 fallback + session 历史 + agent memory）
 - `CLAUDE_CODE_PLUGIN_CACHE_DIR`（plugin cache）
 - `CLAUDE_CODE_TMPDIR`（temp / bundled skill）
 - `CLAUDE_CODE_DEBUG_LOGS_DIR`（debug log）
-- `CLAUDE_CODE_REMOTE_MEMORY_DIR`（remote memory）
+- `CLAUDE_CODE_REMOTE_MEMORY_DIR`（remote memory，仅 remote 模式需要）
 - env-paths cache 不可控（XDG），但只有 cache，可接受
 
 ---
 
 ## 十、对 PRD 的风险提示
 
-按 PRD 章节对应的风险清单：
+下面分两部分：A 是真正与 PRD 假设有冲突或额外语义的项；B 是 adapter 实现层要注意的事，PRD 没规定但绕不开。
 
-1. **PRD 2.3（能力边界）/ 4.2（全量发现）**：Claude Code 没有"单一 registry"。Skills 走 7 路、MCP 走 8 个 scope，且 nested `.claude/skills` 的发现路径会让"同一 cwd 看到的能力集合"依赖于被操作的文件位置。AVM 要自己定义合并和展示规则。
+### A. 与 PRD 假设相关
 
-2. **PRD 6（runtime mapping 状态）**：sandbox 在 Claude Code 是四维（permission rules + path classifier + external sandbox + subprocess），AVM 单字段 sandbox 至少要展开成 `permission.*` rules + `sandbox.enabled` + `--add-dir` 才能 round-trip；否则只能 partial native。
+1. **PRD 2.3（能力边界）/ 4.2（全量发现）**：Claude Code 没有"单一 registry"。Skills 走 7 路、MCP 走 8 个 scope，且 nested `.claude/skills` 的发现路径会让"同一 cwd 看到的能力集合"依赖于被操作的文件位置。AVM 要自己定义合并和展示规则——这是 PRD 4.2 要求"全量发现"和 4.4 要求"解释本次使用了什么"的具体落点。
 
-3. **PRD 4.2（不能静默接管）**：Claude Code 的 skill/MCP 加载是 first-wins、按 source 排序，不互删。AVM 只要不主动改不属于自己的 settings 键就安全。但 dynamic `--mcp-config` 会覆盖 file config，AVM 如果走这条路径，要在 preview 里告诉用户"本次运行的 MCP 与 settings 不一致"。
+2. **PRD 4.2（不能静默接管）**：Claude Code 的 skill/MCP 加载是 first-wins、按 source 排序，不互删。AVM 只要不主动改不属于自己的 settings 键就安全。但 dynamic `--mcp-config` 会覆盖 file config，AVM 如果走这条路径，要在 preview 里告诉用户"本次运行的 MCP 与 settings 不一致"。
 
-4. **PRD 4.4（运行透明）/ 4.6（隔离）**：Claude Code 的硬隔离要靠多个环境变量（`CLAUDE_CONFIG_DIR` + `CLAUDE_CODE_PLUGIN_CACHE_DIR` + `CLAUDE_CODE_TMPDIR` + `CLAUDE_CODE_DEBUG_LOGS_DIR` + ...）一起设，不是单字段开关。AVM `--runtime` 注入这些 env 是可行的，但 `avm doctor` 里要解释每条都要管。
-
-5. **PRD 4.6（memory）**：
+3. **PRD 4.6（memory 隔离）**：
    - "不管 memory" ≠ "memory 不发生"。auto-memory 默认开，会写 `<CLAUDE_CONFIG_DIR>/projects/<git-root>/memory/MEMORY.md`。AVM 即便不让用户管理 memory 内容，也得知道有文件落盘。
-   - Auto-memory base 跟 `CLAUDE_CONFIG_DIR` 走，所以 PRD 的"按 agent ID 隔离"在 AVM 给每个 agent 独立 home 时**自动成立**，不需要额外动作。
-   - 反例提醒：如果 AVM 让多个 agent 共享同一个 `CLAUDE_CONFIG_DIR`，就会撞车——同 git root 下两个 agent 看到同一份 MEMORY.md。AVM 设计时不要走这条路。
-   - 单 agent 内多 worktree 共享 memory 是 Claude Code 故意设计（`paths.ts:200-205`），AVM 不需要也不应该绕过。
+   - Auto-memory base 跟 `CLAUDE_CONFIG_DIR` 走，所以 PRD 4.6 的"按 stable agent ID 隔离 runtime memory boundary"在 AVM 给每个 agent 独立 home 时**自动成立**。
+   - 反例提醒：如果 AVM 让多个 agent 共享同一个 `CLAUDE_CONFIG_DIR`，就会撞车。AVM 设计时不要走这条路。
+   - 单 agent 内多 worktree 共享 memory 是 Claude Code 故意设计（`paths.ts:200-205`，引 `anthropics/claude-code#24382`），AVM 不需要绕过。
 
-6. **PRD 3.3（Package）**：Claude Code plugin 有 marketplace + versioned cache + manifest，比 AVM package 重。AVM package 想导出成 plugin 要做 schema 翻译；不想碰则自己渲染——直接把 skill 放 user `~/.claude/skills`，MCP 写 user 层 settings 即可。
+4. **PRD 2.5（运行透明）trust gate**：project 层配置（`.claude/settings.json`、`.mcp.json`、`headersHelper`）首次加载需要 user trust。AVM 写 project 层时，如果用户没 trust 过这个目录，env / MCP / headersHelper 都不会生效，preview 显示的"将启动什么"和实际不一致。建议 AVM 默认写 user 层，project 层只在用户明确要求时写。
 
-7. **PRD 4.1（init/doctor）**：Claude Code 的状态分散在 `~/.claude.json`、`~/.claude/`、env-paths cache、可选的 plugin override 目录。`avm doctor` 要扫多个位置才能给出"runtime 已就绪"的判断。
+5. **PRD 3.3（Package）**：Claude Code plugin 有 marketplace + versioned cache + manifest，比 AVM package 重。AVM package 想导出成 plugin 要做 schema 翻译；不想碰则自己渲染——直接把 skill 放 user `~/.claude/skills`，MCP 写 user 层 settings 即可。
 
-8. **PRD 2.5（运行透明）trust gate**：project 层配置（`.claude/settings.json`、`.mcp.json`、`headersHelper`）首次加载需要 user trust。AVM 写 project 层时，如果用户没 trust 过这个目录，env / MCP / headersHelper 都不会生效，preview 显示的"将启动什么"和实际不一致。建议 AVM 默认写 user 层，project 层只在用户明确要求时写。
+### B. Adapter 实现注意事项（PRD 未规定但要面对）
 
-9. **PRD 3.4（runtime）**：Claude Code 还有 daemon / remote-control / bridge / background-session / Chrome MCP 等多种早期入口（`cli.tsx:95-247`），AVM 当前只考虑 interactive / headless 两种就够。要避免后续把这些都纳入"AVM 管"的范畴。
+6. **隔离目录**：如果 AVM 选择 per-agent home 实现 PRD 4.6 的 memory isolation，不存在单一 env 开关。要同时设 `CLAUDE_CONFIG_DIR` + `CLAUDE_CODE_PLUGIN_CACHE_DIR` + `CLAUDE_CODE_TMPDIR` + `CLAUDE_CODE_DEBUG_LOGS_DIR`，由 `avm run --runtime` 注入。`avm doctor`（PRD 4.1）要把这几个状态都扫一下才能判断 runtime 就绪。
 
-10. **凭据存储**：非 macOS 平台 secure storage fallback 到明文 `~/.claude/.credentials.json`。AVM 想做"agent 隔离凭据"必须用独立 `CLAUDE_CONFIG_DIR`，不能依赖 secure storage 自身做隔离。
+7. **隔离能力的 round-trip**：Claude Code 的隔离是四维（permission rules + path classifier + external sandbox + subprocess）。PRD 当前 Agent schema 没有 sandbox 字段，所以这条不阻塞。但 AVM adapter 想在 preview 里展示"本次运行的 permission 状态"时，要至少读 settings 里的 `permissions.*` 和 `sandbox.enabled`，不能只看一个字段。
+
+8. **凭据存储**：非 macOS 平台 secure storage fallback 到明文 `~/.claude/.credentials.json`。AVM 想做"agent 隔离凭据"必须用独立 `CLAUDE_CONFIG_DIR`，不能依赖 secure storage 自身做隔离。
+
+9. **入口范围**：Claude Code 还有 daemon / remote-control / bridge / background-session / Chrome MCP 等多种早期入口（`cli.tsx:95-247`），AVM 当前覆盖 interactive / headless 两种就够。这是范围提醒，不是 PRD 风险。
 
 ---
 
