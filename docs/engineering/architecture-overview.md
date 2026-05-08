@@ -14,6 +14,75 @@ is the *where*.
 | Runtime Integration | `internal/runtime`, `internal/runtime/{codex,claudecode,opencode}` | `Driver` (Facts/DiscoverGlobal/Plan/Boundary/LaunchSpec) and `Registry`. Each runtime is a self-contained driver. |
 | Infrastructure | `internal/infra/{home,agentstore,capstore,packageio,runlog,process,managedfile,fsutil}` | Side effects: home layout, Agent YAML persistence, capability content store, zip package IO, run history, process spawning, managed-file atomic writes. |
 
+## Visual layer map
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ Layer 1: Presentation (internal/presentation/cli/)              │
+│   root.go · agent.go · run.go · package.go · capability.go     │
+│   init.go · render.go                                            │
+└──────────────────────────┬──────────────────────────────────────┘
+                           │ only imports service.Container + model
+                           ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ Layer 2: Application                                             │
+│                                                                  │
+│  2a · model (pure data, no external deps)                        │
+│      agent.go · capability.go · run.go · package.go              │
+│      requests.go · diagnostics.go · system.go                    │
+│                                                                  │
+│  2b · service (business orchestration)                           │
+│      AgentService       Repo + Runtimes                          │
+│      RunService         Repo + Runtimes + Writer + Process + Log │
+│      PackageService     Agents + Caps + IO                       │
+│      CapabilityService  Store + Runtimes                         │
+│      DiagnosticsService Runtimes + Log                           │
+│      SystemService      Layout                                   │
+│      container.go (DI aggregate) · errors.go (typed Error)       │
+└─────────┬─────────────────────────────────────┬─────────────────┘
+          │                                     │
+          ▼                                     ▼
+┌──────────────────────────────┐   ┌────────────────────────────┐
+│ Layer 3: Runtime Integration │   │ Layer 4: Infrastructure    │
+│  (internal/runtime/)         │   │  (internal/infra/)         │
+│                              │   │                            │
+│  driver.go (Driver iface,    │   │  agentstore/   Agent yaml  │
+│            Exported,         │   │                  CRUD      │
+│            MCPConfigV1)      │   │  capstore/     content-    │
+│  registry.go (MapRegistry)   │   │                  addressed │
+│  types.go (Plan, Boundary,   │   │                  cap store │
+│            LaunchSpec,       │   │  managedfile/  DryRun +    │
+│            ManagedFile,      │   │                  Apply     │
+│            FieldMapping)     │   │  process/      fork/exec   │
+│                              │   │  runlog/       JSONL log   │
+│  codex/driver.go             │   │  packageio/    zip pack    │
+│  claudecode/driver.go        │   │  home/         AVM_HOME    │
+│  opencode/driver.go          │   │                  layout    │
+│                              │   │  fsutil/       atomic      │
+│                              │   │                  write     │
+└──────────────────────────────┘   └────────────────────────────┘
+
+Dependency direction:
+- 1 → 2          (presentation only sees service.Container + model)
+- 2b → 3, 2b → 4 (services hold driver + infra implementations via interfaces)
+- 2b → 2a, 3 → 2a (services and drivers both speak in model types)
+- 3 ↛ 4, 4 ↛ 3  (runtime and infra are siblings, never cross-reference)
+- 4 ↛ 4         (infra packages are independent of each other)
+```
+
+## Service ↔ infra dependency matrix
+
+Which service uses which lower-layer interface (Run is by far the heaviest):
+
+| Service     | agentstore | capstore | managedfile | process | runlog | packageio | home | runtime |
+| ---         | :-:        | :-:      | :-:         | :-:     | :-:    | :-:       | :-:  | :-:     |
+| Agent       | ✓          |          |             |         |        |           |      | ✓       |
+| Run         | ✓          |          | ✓           | ✓       | ✓      |           |      | ✓       |
+| Package     | ✓          | ✓        |             |         |        | ✓         |      |         |
+| Capability  |            | ✓        |             |         |        |           |      | ✓       |
+| Diagnostics |            |          |             |         | ✓      |           |      | ✓       |
+| System      |            |          |             |         |        |           | ✓    |         |
+
 `cmd/avm/main.go` is the only composition root: it builds the registry,
 instantiates each infra component, assembles a `service.Container`, and hands
 the CLI a `cli.Deps`. No package below it imports anything above it.

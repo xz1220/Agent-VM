@@ -45,6 +45,7 @@ func NewRoot(deps Deps) *cobra.Command {
 	root.AddCommand(newAgentCmd(deps))
 	root.AddCommand(newRunCmd(deps))
 	root.AddCommand(newPackageCmd(deps))
+	root.AddCommand(newCapabilityCmd(deps))
 	root.AddCommand(newInitCmd(deps))
 	root.AddCommand(newDoctorCmd(deps))
 	root.AddCommand(newStatusCmd(deps))

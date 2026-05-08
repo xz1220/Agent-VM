@@ -3,6 +3,8 @@ package service
 import (
 	"context"
 	"errors"
+	"io"
+	"strings"
 	"testing"
 
 	"github.com/xz1220/agent-vm/internal/app/model"
@@ -23,6 +25,16 @@ type fakeDriver struct {
 	facts     runtime.Facts
 	factsErr  error
 	globals   []model.GlobalCapability
+	// exports keys "<kind>:<name>" to canned ExportGlobal payloads.
+	// The string body is wrapped in io.NopCloser and returned verbatim.
+	exports map[string]fakeExport
+}
+
+type fakeExport struct {
+	format   string
+	body     string
+	filename string
+	err      error
 }
 
 func (f *fakeDriver) Name() string { return f.name }
@@ -31,6 +43,33 @@ func (f *fakeDriver) Facts(ctx context.Context) (runtime.Facts, error) {
 }
 func (f *fakeDriver) DiscoverGlobal(ctx context.Context) ([]model.GlobalCapability, error) {
 	return f.globals, nil
+}
+func (f *fakeDriver) ExportGlobal(ctx context.Context, kind model.CapabilityKind, name string) (runtime.Exported, error) {
+	if f.exports == nil {
+		return runtime.Exported{}, runtime.ErrGlobalCapabilityNotFound
+	}
+	e, ok := f.exports[string(kind)+":"+name]
+	if !ok {
+		return runtime.Exported{}, runtime.ErrGlobalCapabilityNotFound
+	}
+	if e.err != nil {
+		return runtime.Exported{}, e.err
+	}
+	// Find the matching GlobalCapability (if any) so the result carries
+	// the same Path the discovery surface advertised.
+	var matched model.GlobalCapability
+	for _, g := range f.globals {
+		if g.Kind == kind && g.Name == name {
+			matched = g
+			break
+		}
+	}
+	return runtime.Exported{
+		Capability: matched,
+		Format:     e.format,
+		Content:    io.NopCloser(strings.NewReader(e.body)),
+		Filename:   e.filename,
+	}, nil
 }
 func (f *fakeDriver) Plan(ctx context.Context, _ *model.Agent) (*runtime.Plan, error) {
 	return f.plan, f.planErr

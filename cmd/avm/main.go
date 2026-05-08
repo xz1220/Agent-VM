@@ -61,9 +61,13 @@ func buildDeps() (cli.Deps, error) {
 		return cli.Deps{}, fmt.Errorf("home layout: %w", err)
 	}
 
+	agents := agentstore.New(layout.AgentsDir())
+	caps := capstore.New(layout.CapabilitiesDir())
+	pkgs := packageio.New()
+
 	registry := runtime.NewRegistry()
 	for _, d := range []runtime.Driver{
-		codex.New(),
+		codex.New(caps),
 		claudecode.New(),
 		opencode.New(),
 	} {
@@ -72,9 +76,6 @@ func buildDeps() (cli.Deps, error) {
 		}
 	}
 
-	agents := agentstore.New(layout.AgentsDir())
-	caps := capstore.New(layout.CapabilitiesDir())
-	pkgs := packageio.New()
 	log := runlog.New(layout.RunLogDir())
 	writer := managedfile.New()
 	proc := process.New()

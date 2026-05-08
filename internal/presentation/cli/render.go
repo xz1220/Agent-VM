@@ -325,6 +325,99 @@ func checkLine(c model.CheckResult) string {
 	return tag
 }
 
+// RenderCapabilityList renders a unified capability candidate list.
+func RenderCapabilityList(w io.Writer, items []model.CapabilityCandidate) error {
+	if len(items) == 0 {
+		return render.Linef(w, "(no capabilities discovered)")
+	}
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "KIND\tNAME\tSOURCE\tSTATUS\tID/PATH")
+	for _, c := range items {
+		status := "-"
+		switch {
+		case c.Imported && c.Conflict:
+			status = "imported,conflict"
+		case c.Imported:
+			status = "imported"
+		case c.Conflict:
+			status = "conflict"
+		}
+		idOrPath := "-"
+		switch {
+		case c.Record != nil:
+			idOrPath = string(c.Record.ID)
+		case c.Global != nil && c.Global.Path != "":
+			idOrPath = c.Global.Path
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n",
+			c.Kind, c.Name, c.Source, status, idOrPath)
+	}
+	return tw.Flush()
+}
+
+// RenderImportResult renders the outcome of a single capability import.
+func RenderImportResult(w io.Writer, r *model.ImportCapabilityResult) error {
+	if r == nil {
+		return render.Linef(w, "(no result)")
+	}
+	verb := "imported"
+	switch {
+	case r.Replaced:
+		verb = "replaced"
+	case !r.Created:
+		verb = "deduped (already in capstore)"
+	}
+	if _, err := fmt.Fprintf(w, "%s %s\n", verb, r.ID); err != nil {
+		return err
+	}
+	if r.Source != "" {
+		fmt.Fprintf(w, "  source: %s\n", r.Source)
+	}
+	return nil
+}
+
+// RenderBootstrapResult renders a bootstrap summary.
+func RenderBootstrapResult(w io.Writer, r *model.BootstrapCapabilitiesResult) error {
+	if r == nil {
+		return render.Linef(w, "(no result)")
+	}
+	if len(r.Imported) == 0 && len(r.Skipped) == 0 {
+		return render.Linef(w, "(nothing to import)")
+	}
+	if len(r.Imported) > 0 {
+		fmt.Fprintf(w, "Imported %d capabilit%s:\n",
+			len(r.Imported), pluralY(len(r.Imported)))
+		tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(tw, "  ID\tCREATED\tREPLACED\tSOURCE")
+		for _, it := range r.Imported {
+			fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\n",
+				it.ID, yesNo(it.Created), yesNo(it.Replaced), it.Source)
+		}
+		tw.Flush()
+	}
+	if len(r.Skipped) > 0 {
+		fmt.Fprintf(w, "Skipped %d:\n", len(r.Skipped))
+		for _, sk := range r.Skipped {
+			fmt.Fprintf(w, "  - %s/%s: %s\n", sk.Kind, sk.Name, sk.Reason)
+		}
+	}
+	return nil
+}
+
+func pluralY(n int) string {
+	if n == 1 {
+		return "y"
+	}
+	return "ies"
+}
+
+func yesNo(b bool) string {
+	if b {
+		return "yes"
+	}
+	return "no"
+}
+
 // RenderStatus renders the status report.
 func RenderStatus(w io.Writer, r *model.StatusReport) error {
 	if r == nil {

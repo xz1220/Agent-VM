@@ -1,14 +1,53 @@
-# AVM UI (placeholder)
+# AVM UI
 
-This directory is reserved for the AVM interactive frontend. The Go CLI
-in `../cmd/avm/` is **plumbing only** — it does not prompt, render
-wizards, or use a TUI library. All interactive UX lives here as a
-TS/JS application that shells out to the Go binary.
+This directory contains the AVM full-screen terminal UI. The Go CLI in
+`../cmd/avm/` is **plumbing only** — it does not prompt, render wizards, or
+use a TUI library. All interactive UX lives here as a TypeScript application
+that shells out to the Go binary.
 
 ## Status
 
-**Not yet started.** This README exists so the Go side can develop
-against a stable contract while the UI is built independently.
+Initial Agent CRUD skeleton:
+
+- Agent list + search.
+- Agent detail panel.
+- Create wizard.
+- Edit workspace.
+- Delete confirmation.
+- Mocked Skills/MCP candidates behind `AvmClient.discoverCapabilities()`.
+
+See [`INTEGRATION-GAPS.md`](./INTEGRATION-GAPS.md) for Go protocol gaps that
+are intentionally mocked or worked around during the first UI pass.
+
+## Development
+
+Install dependencies:
+
+```bash
+npm install
+```
+
+Run against an installed `avm`:
+
+```bash
+npm run dev
+```
+
+Run against the repo build:
+
+```bash
+make -C .. build
+npm run dev -- --avm ../bin/avm
+```
+
+Build the packaged executable:
+
+```bash
+npm run build
+node dist/avm-ui.js --help
+```
+
+The package exposes the executable name `avm-ui`.
 
 ## Contract
 
@@ -22,16 +61,13 @@ writing any UI code. It documents:
 - The two-step Preview → Run flow for `avm run` (multi-runtime and
   drift handling).
 
-## Suggested toolchain (pick when you start)
+## Toolchain
 
-The UI directory is intentionally empty — the agent that builds the UI
-should choose its own stack. Reasonable starting points:
-
-- **Terminal UI**: [Ink](https://github.com/vadimdemedes/ink) (React for
-  terminal) + [inquirer](https://github.com/SBoudrias/Inquirer.js).
-- **Web UI**: Vite + React + TypeScript, calling Go via spawn or HTTP
-  bridge.
-- **VS Code extension**: TypeScript + the VS Code extension API.
+- TypeScript + Node.js.
+- Ink + React for the full-screen TUI.
+- Zod for CLI protocol parsing.
+- Fuse.js for list search/filtering.
+- tsup for single-file ESM output.
 
 ## Calling the Go CLI
 

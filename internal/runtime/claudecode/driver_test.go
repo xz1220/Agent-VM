@@ -3,6 +3,8 @@ package claudecode
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -209,5 +211,90 @@ func TestLaunchSpec_PopulatesEnv(t *testing.T) {
 	}
 	if !spec.Stdin {
 		t.Fatalf("expected Stdin=true")
+	}
+}
+
+func TestExportGlobal_Skill(t *testing.T) {
+	cfgDir := t.TempDir()
+	skillDir := filepath.Join(cfgDir, "skills", "review")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	body := "# review skill\nbe thorough\n"
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(body), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	t.Setenv(EnvConfigDir, cfgDir)
+	t.Setenv("HOME", t.TempDir())
+
+	d := New()
+	exp, err := d.ExportGlobal(context.Background(), model.CapabilityKindSkill, "review")
+	if err != nil {
+		t.Fatalf("ExportGlobal: %v", err)
+	}
+	if exp.Format != model.PayloadFormatSkillMD || exp.Filename != "SKILL.md" {
+		t.Fatalf("bad metadata: %+v", exp)
+	}
+	got, _ := io.ReadAll(exp.Content)
+	exp.Content.Close()
+	if string(got) != body {
+		t.Fatalf("body mismatch")
+	}
+}
+
+func TestExportGlobal_MCP(t *testing.T) {
+	cfgDir := t.TempDir()
+	t.Setenv(EnvConfigDir, cfgDir)
+	t.Setenv("HOME", t.TempDir())
+
+	cfg := map[string]any{
+		"mcpServers": map[string]any{
+			"gh": map[string]any{
+				"command":      "npx",
+				"args":         []any{"-y", "@modelcontextprotocol/server-github"},
+				"env":          map[string]any{"GITHUB_TOKEN": "stub"},
+				"weird_extra":  42.0,
+			},
+		},
+	}
+	raw, _ := json.Marshal(cfg)
+	if err := os.WriteFile(filepath.Join(cfgDir, ".claude.json"), raw, 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	d := New()
+	exp, err := d.ExportGlobal(context.Background(), model.CapabilityKindMCP, "gh")
+	if err != nil {
+		t.Fatalf("ExportGlobal: %v", err)
+	}
+	if exp.Format != model.PayloadFormatMCPConfigV1 {
+		t.Fatalf("Format=%q", exp.Format)
+	}
+	out, _ := io.ReadAll(exp.Content)
+	exp.Content.Close()
+	var cfg2 runtime.MCPConfigV1
+	if err := json.Unmarshal(out, &cfg2); err != nil {
+		t.Fatalf("unmarshal: %v\n%s", err, out)
+	}
+	if cfg2.Command != "npx" || len(cfg2.Args) != 2 {
+		t.Fatalf("bad mcp config: %+v", cfg2)
+	}
+	if cfg2.Env["GITHUB_TOKEN"] != "stub" {
+		t.Fatalf("env: %+v", cfg2.Env)
+	}
+	if _, ok := cfg2.Extra["weird_extra"]; !ok {
+		t.Fatalf("expected weird_extra in Extra: %+v", cfg2.Extra)
+	}
+}
+
+func TestExportGlobal_NotFound(t *testing.T) {
+	cfgDir := t.TempDir()
+	t.Setenv(EnvConfigDir, cfgDir)
+	t.Setenv("HOME", t.TempDir())
+
+	d := New()
+	_, err := d.ExportGlobal(context.Background(), model.CapabilityKindSkill, "ghost")
+	if !errors.Is(err, runtime.ErrGlobalCapabilityNotFound) {
+		t.Fatalf("expected ErrGlobalCapabilityNotFound, got %v", err)
 	}
 }

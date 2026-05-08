@@ -32,6 +32,9 @@ type Store interface {
 	// Materialize prepares the given capabilities under target dir
 	// (e.g. via symlink) so a runtime boundary can reference them.
 	Materialize(ids []model.CapabilityID, target string) error
+	// ReadPayload returns the on-disk bytes of one capability's payload.
+	// Returns ErrNotFound if the ID is unknown.
+	ReadPayload(id model.CapabilityID) ([]byte, error)
 	Remove(id model.CapabilityID) error
 }
 
@@ -58,6 +61,7 @@ type recordFile struct {
 	Source     string `yaml:"source,omitempty"`
 	Checksum   string `yaml:"checksum"`
 	ImportFrom string `yaml:"import_from,omitempty"`
+	Format     string `yaml:"format,omitempty"`
 	// PayloadFile is the on-disk filename inside the payload/ subdir.
 	PayloadFile string `yaml:"payload_file"`
 }
@@ -71,6 +75,7 @@ func toRecordFile(r model.CapabilityRecord, payloadFile string) recordFile {
 		Source:      string(r.Source),
 		Checksum:    r.Checksum,
 		ImportFrom:  r.ImportFrom,
+		Format:      r.Format,
 		PayloadFile: payloadFile,
 	}
 }
@@ -84,7 +89,25 @@ func (rf recordFile) toModel() model.CapabilityRecord {
 		Source:     model.CapabilitySource(rf.Source),
 		Checksum:   rf.Checksum,
 		ImportFrom: rf.ImportFrom,
+		Format:     rf.Format,
 	}
+}
+
+// payloadFilenameFor picks the on-disk filename inside the payload
+// directory. Format takes precedence so callers can request a stable
+// filename runtimes expect (e.g. "SKILL.md"). Empty Format falls back
+// to the legacy "filename = capability name" behavior.
+func payloadFilenameFor(rec model.CapabilityRecord) string {
+	switch rec.Format {
+	case model.PayloadFormatSkillMD:
+		return "SKILL.md"
+	case model.PayloadFormatMCPConfigV1:
+		return "mcp.json"
+	}
+	if rec.Name != "" {
+		return rec.Name
+	}
+	return string(rec.ID)
 }
 
 func (s *FSStore) idDir(id model.CapabilityID) string {
@@ -147,6 +170,28 @@ func (s *FSStore) Get(id model.CapabilityID) (model.CapabilityRecord, error) {
 	return rf.toModel(), nil
 }
 
+// ReadPayload returns the on-disk bytes of one capability's payload.
+func (s *FSStore) ReadPayload(id model.CapabilityID) ([]byte, error) {
+	if id == "" {
+		return nil, ErrNotFound
+	}
+	data, err := os.ReadFile(s.manifestPath(id))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	var rf recordFile
+	if err := yaml.Unmarshal(data, &rf); err != nil {
+		return nil, fmt.Errorf("capstore: parse %s: %w", s.manifestPath(id), err)
+	}
+	if rf.PayloadFile == "" {
+		return nil, fmt.Errorf("capstore: empty payload_file for %s", id)
+	}
+	return os.ReadFile(filepath.Join(s.payloadDir(id), rf.PayloadFile))
+}
+
 // Add stores payload under a new ID derived from (kind,name,sha256(content)).
 // Identical (kind,name,content) returns the existing ID.
 func (s *FSStore) Add(rec model.CapabilityRecord, payload io.Reader) (model.CapabilityID, error) {
@@ -181,10 +226,7 @@ func (s *FSStore) Add(rec model.CapabilityRecord, payload io.Reader) (model.Capa
 	if err := os.MkdirAll(s.payloadDir(id), 0o755); err != nil {
 		return "", err
 	}
-	payloadName := rec.Name
-	if payloadName == "" {
-		payloadName = string(id)
-	}
+	payloadName := payloadFilenameFor(rec)
 	payloadPath := filepath.Join(s.payloadDir(id), payloadName)
 	if err := fsutil.AtomicWriteFile(payloadPath, buf, 0o644); err != nil {
 		return "", err

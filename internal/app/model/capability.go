@@ -25,6 +25,18 @@ const (
 	SourceRuntimeGlobal CapabilitySource = "runtime" // discovered in runtime global dir
 )
 
+// PayloadFormat is the contract between the writer of a capability and
+// any reader / runtime materializer about how to interpret the bytes
+// stored in capstore. Format also drives the on-disk filename inside
+// the capstore payload directory (e.g. SkillMD → "SKILL.md").
+//
+// Empty Format keeps backward compatibility with pre-import records
+// and means "use the capability Name as the filename".
+const (
+	PayloadFormatSkillMD     = "skill_md"        // a single SKILL.md file (skills)
+	PayloadFormatMCPConfigV1 = "mcp_config_v1"   // canonical AVM MCP JSON (see runtime drivers)
+)
+
 // CapabilityRecord is an entry in the AVM capability store.
 type CapabilityRecord struct {
 	ID         CapabilityID     `json:"id"`
@@ -34,6 +46,9 @@ type CapabilityRecord struct {
 	Source     CapabilitySource `json:"source"`
 	Checksum   string           `json:"checksum,omitempty"`
 	ImportFrom string           `json:"import_from,omitempty"` // optional audit: package name or runtime path
+	// Format declares how the payload bytes should be interpreted.
+	// See PayloadFormat* constants. Empty = legacy "filename = Name".
+	Format string `json:"format,omitempty"`
 }
 
 // GlobalCapability is what a runtime reports during global discovery.
@@ -57,4 +72,8 @@ type CapabilityCandidate struct {
 	Record   *CapabilityRecord `json:"record,omitempty"` // set when Source != SourceRuntimeGlobal
 	Global   *GlobalCapability `json:"global,omitempty"` // set when Source == SourceRuntimeGlobal
 	Conflict bool              `json:"conflict,omitempty"`
+	// Imported is set on runtime-global candidates when an AVM-managed
+	// record with the same (kind, name) already exists in capstore.
+	// UI can use this to suppress redundant import prompts.
+	Imported bool `json:"imported,omitempty"`
 }

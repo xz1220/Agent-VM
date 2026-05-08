@@ -250,12 +250,42 @@ func (f *fakePackages) Inspect(ctx context.Context, file string) (*model.Package
 
 // fakeCaps is a test-only CapabilityService.
 type fakeCaps struct {
-	cands []model.CapabilityCandidate
-	err   error
+	cands       []model.CapabilityCandidate
+	err         error
+	importRes   *model.ImportCapabilityResult
+	importErr   error
+	importReqs  []model.ImportCapabilityRequest
+	bootRes     *model.BootstrapCapabilitiesResult
+	bootErr     error
+	bootReqs    []model.BootstrapCapabilitiesRequest
 }
 
 func (f *fakeCaps) Discover(ctx context.Context, req model.DiscoverRequest) ([]model.CapabilityCandidate, error) {
 	return f.cands, f.err
+}
+func (f *fakeCaps) Import(ctx context.Context, req model.ImportCapabilityRequest) (*model.ImportCapabilityResult, error) {
+	f.importReqs = append(f.importReqs, req)
+	if f.importErr != nil {
+		return nil, f.importErr
+	}
+	if f.importRes != nil {
+		return f.importRes, nil
+	}
+	return &model.ImportCapabilityResult{
+		ID:      model.CapabilityID("cap_fake_" + req.Name),
+		Created: true,
+		Source:  req.Runtime + ":/fake/" + req.Name,
+	}, nil
+}
+func (f *fakeCaps) Bootstrap(ctx context.Context, req model.BootstrapCapabilitiesRequest) (*model.BootstrapCapabilitiesResult, error) {
+	f.bootReqs = append(f.bootReqs, req)
+	if f.bootErr != nil {
+		return nil, f.bootErr
+	}
+	if f.bootRes != nil {
+		return f.bootRes, nil
+	}
+	return &model.BootstrapCapabilitiesResult{}, nil
 }
 
 // fakeDiagnostics is a test-only DiagnosticsService.

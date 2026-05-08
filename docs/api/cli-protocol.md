@@ -55,6 +55,9 @@ omitted (`omitempty`).
 | `avm package uninstall <name>` | `null` |
 | `avm package export <agent>` | `ExportResult` |
 | `avm package inspect <file>` | `PackageDetail` |
+| `avm capability discover` | `[]CapabilityCandidate` |
+| `avm capability import` | `ImportCapabilityResult` |
+| `avm capability bootstrap` | `BootstrapCapabilitiesResult` |
 | `avm doctor` | `DoctorReport` |
 | `avm status [agent]` | `StatusReport` |
 | `avm init` | `InitResult` (currently human-only; JSON support TBD) |
@@ -67,6 +70,7 @@ structs are the source of truth for field names. See:
 - `capability.go` — `CapabilityID`, `CapabilityKind`, `CapabilitySource`, `CapabilityRecord`, `GlobalCapability`, `CapabilityCandidate`
 - `run.go` — `RunRequest`, `RunPreview`, `RunResult`, `RunRecord`, `BoundarySummary`, `MappingStatus`, `DriftPolicy`, `DiffEntry`, `Warning`
 - `package.go` — `PackageManifest`, `PackageSummary`, `PackageDetail`, `InstallRequest`/`Result`, `ExportRequest`/`Result`, `ConflictResolution`
+- `requests.go` — `ImportCapabilityRequest`/`Result`, `BootstrapCapabilitiesRequest`/`Result`, `SkippedCapability`
 - `diagnostics.go` — `DoctorReport`, `StatusReport`, `RuntimeCheck`, `CheckResult`
 - `system.go` — `InitResult`, `UninstallResult`
 
@@ -111,8 +115,8 @@ Human mode prints `avm: <message>` to stderr instead.
 | `PACKAGE_NOT_FOUND` | reserved for future installed-package registry | `{"name": string}` | Named installed package does not exist. |
 | `PACKAGE_INVALID_MANIFEST` | `package install`/`inspect` | `{"file": string}` or `{"path": string}` | Manifest could not be parsed or required fields are missing. |
 | `PACKAGE_CHECKSUM_MISMATCH` | reserved | `{"file": string, "want": string, "got": string}` | Capability blob checksum did not match manifest. |
-| `CAPABILITY_NOT_FOUND` | `package export` | `{"id": string}` | Referenced capability ID is not in the AVM capability store. |
-| `CAPABILITY_CONFLICT` | reserved (currently surfaced as `Conflict: true` flag in `Discover`) | TBD | Same `(kind, name)` exists under multiple sources (AVM-managed and runtime-global). |
+| `CAPABILITY_NOT_FOUND` | `package export`, `capability import` | `{"id": string}` for export; `{"runtime": string, "kind": string, "name": string}` for import | The referenced capability ID / (runtime,kind,name) is unknown. |
+| `CAPABILITY_CONFLICT` | `capability import` | `{"kind": string, "name": string, "existing_id": string, "existing_checksum": string}` | A different-content capability with the same `(kind,name)` already lives in capstore. UI: present existing record and prompt for `--on-conflict skip|overwrite`. Same `(kind,name)` across multiple discovery sources is also reflected by the `Conflict: true` flag on `Discover` results. |
 | `MISSING_INPUT` | many; common for missing `--name`, `--yes`, `--shell` | `{"field": string, "hint": string}` | A required input was absent. UI: surface `hint` and re-issue with the field set. |
 | `VALIDATION` | several; e.g. unknown `--on-conflict` value | varies | Generic validation failure not fitting a narrower code. |
 | `IO_FAILURE` | many | varies | Underlying filesystem / zip / network IO failed. |
@@ -160,6 +164,29 @@ avm package install <file>            # default fails on AGENT_CONFLICT
 avm package install <file> --on-conflict {rename|skip|overwrite|cancel}
 ```
 
+### Capability discover / import flow
+
+```
+# 1. See every capability AVM can find — AVM-managed records plus
+#    runtime-global discoveries. Imported=true on a runtime-global
+#    candidate means "already in capstore, no need to import again".
+avm capability discover --json
+avm capability discover --runtime codex --kind skill
+
+# 2. Import a single runtime-global capability into capstore.
+avm capability import --runtime codex --kind skill --name hello --json
+  → success: ImportCapabilityResult { id, created, replaced, source }
+  → CAPABILITY_NOT_FOUND if the runtime doesn't expose this (kind,name)
+  → CAPABILITY_CONFLICT if (kind,name) already exists with different content
+    → re-issue with --on-conflict {skip|overwrite}
+
+# 3. First-install bootstrap: import every runtime-global capability
+#    a runtime exposes. Per-item failures land in `skipped` and never
+#    abort the run.
+avm capability bootstrap --runtime codex --json
+  → BootstrapCapabilitiesResult { imported: [...], skipped: [...] }
+```
+
 ## 7. Stability guarantees
 
 | Surface | Stability |
@@ -176,6 +203,7 @@ avm package install <file> --on-conflict {rename|skip|overwrite|cancel}
 - JSON schemas: implicit, derived from Go struct tags in `internal/app/model/`.
 - Error code constants: `internal/app/service/errors.go` `Code*`.
 - CLI error envelope wrapper: `internal/presentation/cli/root.go::renderError`.
-- Test for JSON envelope: `internal/presentation/cli/agent_test.go::TestJSONError_Envelope`.
+- Test for JSON envelope (general): `internal/presentation/cli/agent_test.go::TestJSONError_Envelope`.
+- Test for CAPABILITY_CONFLICT envelope: `internal/presentation/cli/capability_test.go::TestCapabilityImport_ConflictEnvelope`.
 
 If you change any of these, update this document in the same PR.

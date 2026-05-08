@@ -7,10 +7,12 @@
 package claudecode
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -87,6 +89,152 @@ func (d *Driver) DiscoverGlobal(ctx context.Context) ([]model.GlobalCapability, 
 		out = append(out, scanMCPFromGlobalConfig(jsonPath)...)
 	}
 	return out, nil
+}
+
+// ExportGlobal materializes a single Claude Code global capability into
+// AVM canonical bytes. Skills come from <skill-dir>/SKILL.md verbatim;
+// MCP servers are pulled from ~/.claude.json's mcpServers object and
+// reshaped into MCPConfigV1 JSON.
+func (d *Driver) ExportGlobal(ctx context.Context, kind model.CapabilityKind, name string) (runtime.Exported, error) {
+	if name == "" {
+		return runtime.Exported{}, errors.New("claude-code: empty capability name")
+	}
+	candidates, err := d.DiscoverGlobal(ctx)
+	if err != nil {
+		return runtime.Exported{}, err
+	}
+	var match *model.GlobalCapability
+	for i := range candidates {
+		c := candidates[i]
+		if c.Kind == kind && c.Name == name {
+			match = &candidates[i]
+			break
+		}
+	}
+	if match == nil {
+		return runtime.Exported{}, runtime.ErrGlobalCapabilityNotFound
+	}
+
+	switch kind {
+	case model.CapabilityKindSkill:
+		manifest := filepath.Join(match.Path, "SKILL.md")
+		f, err := os.Open(manifest)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return runtime.Exported{}, runtime.ErrGlobalCapabilityNotFound
+			}
+			return runtime.Exported{}, fmt.Errorf("claude-code: open SKILL.md: %w", err)
+		}
+		return runtime.Exported{
+			Capability: *match,
+			Format:     model.PayloadFormatSkillMD,
+			Content:    f,
+			Filename:   "SKILL.md",
+		}, nil
+	case model.CapabilityKindMCP:
+		raw, err := os.ReadFile(match.Path)
+		if err != nil {
+			return runtime.Exported{}, fmt.Errorf("claude-code: read config: %w", err)
+		}
+		cfg, err := claudeExtractMCP(raw, name)
+		if err != nil {
+			return runtime.Exported{}, err
+		}
+		buf, err := json.MarshalIndent(cfg, "", "  ")
+		if err != nil {
+			return runtime.Exported{}, err
+		}
+		return runtime.Exported{
+			Capability: *match,
+			Format:     model.PayloadFormatMCPConfigV1,
+			Content:    io.NopCloser(bytes.NewReader(buf)),
+			Filename:   "mcp.json",
+		}, nil
+	}
+	return runtime.Exported{}, fmt.Errorf("claude-code: unsupported kind %q", kind)
+}
+
+// claudeExtractMCP parses a .claude.json byte slice and pulls
+// mcpServers[name] into MCPConfigV1.
+func claudeExtractMCP(raw []byte, name string) (runtime.MCPConfigV1, error) {
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &top); err != nil {
+		return runtime.MCPConfigV1{}, fmt.Errorf("claude-code: parse config: %w", err)
+	}
+	serversRaw, ok := top["mcpServers"]
+	if !ok {
+		return runtime.MCPConfigV1{}, runtime.ErrGlobalCapabilityNotFound
+	}
+	var servers map[string]map[string]any
+	if err := json.Unmarshal(serversRaw, &servers); err != nil {
+		return runtime.MCPConfigV1{}, fmt.Errorf("claude-code: parse mcpServers: %w", err)
+	}
+	section, ok := servers[name]
+	if !ok {
+		return runtime.MCPConfigV1{}, runtime.ErrGlobalCapabilityNotFound
+	}
+	out := runtime.MCPConfigV1{Kind: string(model.CapabilityKindMCP), Name: name}
+	extra := map[string]any{}
+	for k, v := range section {
+		switch k {
+		case "command":
+			if s, ok := v.(string); ok {
+				out.Command = s
+			} else {
+				extra[k] = v
+			}
+		case "args":
+			if a := jsonToStringSlice(v); a != nil {
+				out.Args = a
+			} else if v != nil {
+				extra[k] = v
+			}
+		case "env":
+			if m := jsonToStringMap(v); m != nil {
+				out.Env = m
+			} else if v != nil {
+				extra[k] = v
+			}
+		default:
+			extra[k] = v
+		}
+	}
+	if len(extra) > 0 {
+		out.Extra = extra
+	}
+	return out, nil
+}
+
+func jsonToStringSlice(v any) []string {
+	arr, ok := v.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(arr))
+	for _, e := range arr {
+		s, ok := e.(string)
+		if !ok {
+			return nil
+		}
+		out = append(out, s)
+	}
+	return out
+}
+
+func jsonToStringMap(v any) map[string]string {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return nil
+	}
+	out := make(map[string]string, len(m))
+	for k, val := range m {
+		s, ok := val.(string)
+		if !ok {
+			return nil
+		}
+		out[k] = s
+	}
+	return out
 }
 
 // Plan renders the Agent into Claude Code managed files.

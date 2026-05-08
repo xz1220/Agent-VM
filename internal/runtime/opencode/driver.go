@@ -6,10 +6,12 @@
 package opencode
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -91,6 +93,160 @@ func (d *Driver) DiscoverGlobal(ctx context.Context) ([]model.GlobalCapability, 
 		out = append(out, scanMCPFromConfig(filepath.Join(root, "openclaw.json"))...)
 	}
 	return out, nil
+}
+
+// ExportGlobal materializes a single OpenClaw global capability into
+// AVM canonical bytes. Skills come from <skill-dir>/SKILL.md verbatim;
+// MCP servers are pulled from openclaw.json's mcp.servers object and
+// reshaped into MCPConfigV1 JSON.
+func (d *Driver) ExportGlobal(ctx context.Context, kind model.CapabilityKind, name string) (runtime.Exported, error) {
+	if name == "" {
+		return runtime.Exported{}, errors.New("opencode: empty capability name")
+	}
+	candidates, err := d.DiscoverGlobal(ctx)
+	if err != nil {
+		return runtime.Exported{}, err
+	}
+	var match *model.GlobalCapability
+	for i := range candidates {
+		c := candidates[i]
+		if c.Kind == kind && c.Name == name {
+			match = &candidates[i]
+			break
+		}
+	}
+	if match == nil {
+		return runtime.Exported{}, runtime.ErrGlobalCapabilityNotFound
+	}
+
+	switch kind {
+	case model.CapabilityKindSkill:
+		manifest := filepath.Join(match.Path, "SKILL.md")
+		f, err := os.Open(manifest)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return runtime.Exported{}, runtime.ErrGlobalCapabilityNotFound
+			}
+			return runtime.Exported{}, fmt.Errorf("opencode: open SKILL.md: %w", err)
+		}
+		return runtime.Exported{
+			Capability: *match,
+			Format:     model.PayloadFormatSkillMD,
+			Content:    f,
+			Filename:   "SKILL.md",
+		}, nil
+	case model.CapabilityKindMCP:
+		raw, err := os.ReadFile(match.Path)
+		if err != nil {
+			return runtime.Exported{}, fmt.Errorf("opencode: read config: %w", err)
+		}
+		cfg, err := openclawExtractMCP(raw, name)
+		if err != nil {
+			return runtime.Exported{}, err
+		}
+		buf, err := json.MarshalIndent(cfg, "", "  ")
+		if err != nil {
+			return runtime.Exported{}, err
+		}
+		return runtime.Exported{
+			Capability: *match,
+			Format:     model.PayloadFormatMCPConfigV1,
+			Content:    io.NopCloser(bytes.NewReader(buf)),
+			Filename:   "mcp.json",
+		}, nil
+	}
+	return runtime.Exported{}, fmt.Errorf("opencode: unsupported kind %q", kind)
+}
+
+// openclawExtractMCP parses an openclaw.json byte slice and pulls
+// mcp.servers[name] into MCPConfigV1.
+func openclawExtractMCP(raw []byte, name string) (runtime.MCPConfigV1, error) {
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &top); err != nil {
+		return runtime.MCPConfigV1{}, fmt.Errorf("opencode: parse config: %w", err)
+	}
+	mcpRaw, ok := top["mcp"]
+	if !ok {
+		return runtime.MCPConfigV1{}, runtime.ErrGlobalCapabilityNotFound
+	}
+	var mcp map[string]json.RawMessage
+	if err := json.Unmarshal(mcpRaw, &mcp); err != nil {
+		return runtime.MCPConfigV1{}, fmt.Errorf("opencode: parse mcp: %w", err)
+	}
+	serversRaw, ok := mcp["servers"]
+	if !ok {
+		return runtime.MCPConfigV1{}, runtime.ErrGlobalCapabilityNotFound
+	}
+	var servers map[string]map[string]any
+	if err := json.Unmarshal(serversRaw, &servers); err != nil {
+		return runtime.MCPConfigV1{}, fmt.Errorf("opencode: parse mcp.servers: %w", err)
+	}
+	section, ok := servers[name]
+	if !ok {
+		return runtime.MCPConfigV1{}, runtime.ErrGlobalCapabilityNotFound
+	}
+	out := runtime.MCPConfigV1{Kind: string(model.CapabilityKindMCP), Name: name}
+	extra := map[string]any{}
+	for k, v := range section {
+		switch k {
+		case "command":
+			if s, ok := v.(string); ok {
+				out.Command = s
+			} else {
+				extra[k] = v
+			}
+		case "args":
+			if a := jsonToStringSlice(v); a != nil {
+				out.Args = a
+			} else if v != nil {
+				extra[k] = v
+			}
+		case "env":
+			if m := jsonToStringMap(v); m != nil {
+				out.Env = m
+			} else if v != nil {
+				extra[k] = v
+			}
+		default:
+			extra[k] = v
+		}
+	}
+	if len(extra) > 0 {
+		out.Extra = extra
+	}
+	return out, nil
+}
+
+func jsonToStringSlice(v any) []string {
+	arr, ok := v.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(arr))
+	for _, e := range arr {
+		s, ok := e.(string)
+		if !ok {
+			return nil
+		}
+		out = append(out, s)
+	}
+	return out
+}
+
+func jsonToStringMap(v any) map[string]string {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return nil
+	}
+	out := make(map[string]string, len(m))
+	for k, val := range m {
+		s, ok := val.(string)
+		if !ok {
+			return nil
+		}
+		out[k] = s
+	}
+	return out
 }
 
 // Plan renders the Agent into OpenClaw managed config.

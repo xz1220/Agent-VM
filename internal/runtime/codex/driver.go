@@ -7,9 +7,12 @@
 package codex
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,7 +20,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/BurntSushi/toml"
+
 	"github.com/xz1220/agent-vm/internal/app/model"
+	"github.com/xz1220/agent-vm/internal/infra/capstore"
 	"github.com/xz1220/agent-vm/internal/runtime"
 )
 
@@ -29,10 +35,18 @@ const EnvHome = "CODEX_HOME"
 
 // Driver is the Codex runtime adapter. Construction is via New so we
 // can later inject filesystem helpers, env probes, etc.
-type Driver struct{}
+//
+// Caps is consulted by Plan to materialize Agent-referenced skill /
+// MCP capability payloads into the boundary directory. It may be nil
+// in tests that exercise paths not requiring capability content.
+type Driver struct {
+	Caps capstore.Store
+}
 
-// New returns a Codex driver.
-func New() *Driver { return &Driver{} }
+// New returns a Codex driver bound to the given capability store.
+func New(caps capstore.Store) *Driver {
+	return &Driver{Caps: caps}
+}
 
 // Name reports the canonical registry key.
 func (d *Driver) Name() string { return Name }
@@ -90,6 +104,148 @@ func (d *Driver) DiscoverGlobal(ctx context.Context) ([]model.GlobalCapability, 
 	return out, nil
 }
 
+// ExportGlobal materializes a single Codex global capability into AVM
+// canonical bytes. Skills are read straight from <skill-dir>/SKILL.md;
+// MCP servers are extracted from CODEX_HOME/config.toml's
+// [mcp_servers.NAME] table and serialized as MCPConfigV1 JSON.
+func (d *Driver) ExportGlobal(ctx context.Context, kind model.CapabilityKind, name string) (runtime.Exported, error) {
+	if name == "" {
+		return runtime.Exported{}, errors.New("codex: empty capability name")
+	}
+	candidates, err := d.DiscoverGlobal(ctx)
+	if err != nil {
+		return runtime.Exported{}, err
+	}
+	var match *model.GlobalCapability
+	for i := range candidates {
+		c := candidates[i]
+		if c.Kind == kind && c.Name == name {
+			match = &candidates[i]
+			break
+		}
+	}
+	if match == nil {
+		return runtime.Exported{}, runtime.ErrGlobalCapabilityNotFound
+	}
+
+	switch kind {
+	case model.CapabilityKindSkill:
+		manifest := filepath.Join(match.Path, "SKILL.md")
+		f, err := os.Open(manifest)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return runtime.Exported{}, runtime.ErrGlobalCapabilityNotFound
+			}
+			return runtime.Exported{}, fmt.Errorf("codex: open SKILL.md: %w", err)
+		}
+		return runtime.Exported{
+			Capability: *match,
+			Format:     model.PayloadFormatSkillMD,
+			Content:    f,
+			Filename:   "SKILL.md",
+		}, nil
+	case model.CapabilityKindMCP:
+		// match.Path is the config.toml file the section came from.
+		raw, err := os.ReadFile(match.Path)
+		if err != nil {
+			return runtime.Exported{}, fmt.Errorf("codex: read config: %w", err)
+		}
+		cfg, err := codexExtractMCP(raw, name)
+		if err != nil {
+			return runtime.Exported{}, err
+		}
+		buf, err := json.MarshalIndent(cfg, "", "  ")
+		if err != nil {
+			return runtime.Exported{}, err
+		}
+		return runtime.Exported{
+			Capability: *match,
+			Format:     model.PayloadFormatMCPConfigV1,
+			Content:    io.NopCloser(bytes.NewReader(buf)),
+			Filename:   "mcp.json",
+		}, nil
+	}
+	return runtime.Exported{}, fmt.Errorf("codex: unsupported kind %q", kind)
+}
+
+// codexExtractMCP parses a Codex config.toml byte slice and pulls
+// [mcp_servers.NAME] into a canonical MCPConfigV1. Unknown TOML keys
+// inside the section are preserved in Extra so an import→export round
+// trip keeps fidelity.
+func codexExtractMCP(raw []byte, name string) (runtime.MCPConfigV1, error) {
+	var doc struct {
+		MCPServers map[string]map[string]any `toml:"mcp_servers"`
+	}
+	if err := toml.Unmarshal(raw, &doc); err != nil {
+		return runtime.MCPConfigV1{}, fmt.Errorf("codex: parse config.toml: %w", err)
+	}
+	section, ok := doc.MCPServers[name]
+	if !ok {
+		return runtime.MCPConfigV1{}, runtime.ErrGlobalCapabilityNotFound
+	}
+
+	out := runtime.MCPConfigV1{Kind: string(model.CapabilityKindMCP), Name: name}
+	extra := map[string]any{}
+	for k, v := range section {
+		switch k {
+		case "command":
+			if s, ok := v.(string); ok {
+				out.Command = s
+			} else {
+				extra[k] = v
+			}
+		case "args":
+			out.Args = toStringSlice(v)
+			if out.Args == nil {
+				extra[k] = v
+			}
+		case "env":
+			out.Env = toStringMap(v)
+			if out.Env == nil {
+				extra[k] = v
+			}
+		default:
+			extra[k] = v
+		}
+	}
+	if len(extra) > 0 {
+		out.Extra = extra
+	}
+	return out, nil
+}
+
+func toStringSlice(v any) []string {
+	arr, ok := v.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(arr))
+	for _, e := range arr {
+		s, ok := e.(string)
+		if !ok {
+			return nil
+		}
+		out = append(out, s)
+	}
+	return out
+}
+
+func toStringMap(v any) map[string]string {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return nil
+	}
+	out := make(map[string]string, len(m))
+	for k, val := range m {
+		s, ok := val.(string)
+		if !ok {
+			return nil
+		}
+		out[k] = s
+	}
+	return out
+}
+
 // Plan renders the Agent into Codex's managed config files.
 func (d *Driver) Plan(ctx context.Context, agent *model.Agent) (*runtime.Plan, error) {
 	if agent == nil {
@@ -105,23 +261,46 @@ func (d *Driver) Plan(ctx context.Context, agent *model.Agent) (*runtime.Plan, e
 
 	plan := &runtime.Plan{}
 
+	// Resolve all MCP capability content from capstore upfront so
+	// renderConfigTOML can emit complete [mcp_servers.<name>] sections.
+	mcps, err := d.resolveMCPConfigs(agent.MCP)
+	if err != nil {
+		return nil, err
+	}
+
 	// Build instructions text: AVM Agent identity & instructions become
 	// developer instructions in AGENTS.md (Codex native loader path).
 	instructions := renderInstructions(agent)
-	agentsMD := filepath.Join(bnd.StateDir, "AGENTS.md")
 	plan.Files = append(plan.Files, runtime.ManagedFile{
-		Path:     agentsMD,
+		Path:     filepath.Join(bnd.StateDir, "AGENTS.md"),
 		Mode:     0o600,
 		Contents: []byte(instructions),
 	})
 
 	// Render config.toml that pins the runtime to AVM-managed roots.
-	configTOML := filepath.Join(bnd.StateDir, "config.toml")
 	plan.Files = append(plan.Files, runtime.ManagedFile{
-		Path:     configTOML,
+		Path:     filepath.Join(bnd.StateDir, "config.toml"),
 		Mode:     0o600,
-		Contents: []byte(renderConfigTOML(agent)),
+		Contents: []byte(renderConfigTOML(mcps)),
 	})
+
+	// Skills: copy each capstore-resident SKILL.md into the boundary
+	// under skills/<name>/SKILL.md so Codex's loader (root #2) finds them.
+	skillFiles, err := d.materializeSkills(bnd.StateDir, agent.Skills)
+	if err != nil {
+		return nil, err
+	}
+	plan.Files = append(plan.Files, skillFiles...)
+
+	// auth.json: best-effort copy from user-level ~/.codex/auth.json.
+	// Missing source is silently skipped (user not logged in to codex
+	// globally yet — codex itself will prompt on first run). Real IO
+	// errors are surfaced as a warning so Plan still proceeds.
+	if authFile, warning := readUserAuthJSON(bnd.StateDir); authFile != nil {
+		plan.Files = append(plan.Files, *authFile)
+	} else if warning != nil {
+		plan.Warnings = append(plan.Warnings, *warning)
+	}
 
 	// Per-field mapping
 	plan.Mappings = append(plan.Mappings,
@@ -150,13 +329,13 @@ func (d *Driver) Plan(ctx context.Context, agent *model.Agent) (*runtime.Plan, e
 	if len(agent.Skills) > 0 {
 		plan.Mappings = append(plan.Mappings, runtime.FieldMapping{
 			Field: "skills", Status: model.MappingNative,
-			Note: "AVM materializes skills into <CODEX_HOME>/skills/<id>; infra performs the linking.",
+			Note: "materialized as <CODEX_HOME>/skills/<name>/SKILL.md for codex's user-scope loader.",
 		})
 	}
 	if len(agent.MCP) > 0 {
 		plan.Mappings = append(plan.Mappings, runtime.FieldMapping{
 			Field: "mcp", Status: model.MappingNative,
-			Note: "rendered into <CODEX_HOME>/config.toml [mcp_servers] table.",
+			Note: "rendered into <CODEX_HOME>/config.toml [mcp_servers.<name>] sections.",
 		})
 	}
 	if len(agent.Runtimes) > 0 {
@@ -177,6 +356,109 @@ func (d *Driver) Plan(ctx context.Context, agent *model.Agent) (*runtime.Plan, e
 	})
 
 	return plan, nil
+}
+
+// resolvedMCP pairs an MCP capability's logical name (the section key
+// in config.toml) with its parsed mcp_config_v1 payload.
+type resolvedMCP struct {
+	Name string
+	Cfg  runtime.MCPConfigV1
+}
+
+// resolveMCPConfigs reads each MCP capability from capstore and parses
+// the payload as MCPConfigV1. Two refs resolving to the same logical
+// name are rejected since they would collide in TOML.
+func (d *Driver) resolveMCPConfigs(refs []model.CapabilityRef) ([]resolvedMCP, error) {
+	if len(refs) == 0 {
+		return nil, nil
+	}
+	if d.Caps == nil {
+		return nil, errors.New("codex: capability store not configured")
+	}
+	seen := map[string]struct{}{}
+	out := make([]resolvedMCP, 0, len(refs))
+	for _, ref := range refs {
+		rec, err := d.Caps.Get(ref.ID)
+		if err != nil {
+			return nil, fmt.Errorf("codex: mcp %s: %w", ref.ID, err)
+		}
+		if _, dup := seen[rec.Name]; dup {
+			return nil, fmt.Errorf("codex: agent has multiple MCPs named %q; pick one", rec.Name)
+		}
+		seen[rec.Name] = struct{}{}
+		body, err := d.Caps.ReadPayload(ref.ID)
+		if err != nil {
+			return nil, fmt.Errorf("codex: read mcp %s payload: %w", ref.ID, err)
+		}
+		var cfg runtime.MCPConfigV1
+		if err := json.Unmarshal(body, &cfg); err != nil {
+			return nil, fmt.Errorf("codex: parse mcp_config_v1 for %s: %w", rec.Name, err)
+		}
+		if cfg.Name == "" {
+			cfg.Name = rec.Name
+		}
+		out = append(out, resolvedMCP{Name: rec.Name, Cfg: cfg})
+	}
+	return out, nil
+}
+
+// materializeSkills returns one ManagedFile per skill ref placing the
+// capstore payload at <boundary>/skills/<name>/SKILL.md.
+func (d *Driver) materializeSkills(boundary string, refs []model.CapabilityRef) ([]runtime.ManagedFile, error) {
+	if len(refs) == 0 {
+		return nil, nil
+	}
+	if d.Caps == nil {
+		return nil, errors.New("codex: capability store not configured")
+	}
+	seen := map[string]struct{}{}
+	out := make([]runtime.ManagedFile, 0, len(refs))
+	for _, ref := range refs {
+		rec, err := d.Caps.Get(ref.ID)
+		if err != nil {
+			return nil, fmt.Errorf("codex: skill %s: %w", ref.ID, err)
+		}
+		if _, dup := seen[rec.Name]; dup {
+			return nil, fmt.Errorf("codex: agent has multiple skills named %q; pick one", rec.Name)
+		}
+		seen[rec.Name] = struct{}{}
+		body, err := d.Caps.ReadPayload(ref.ID)
+		if err != nil {
+			return nil, fmt.Errorf("codex: read skill %s payload: %w", ref.ID, err)
+		}
+		out = append(out, runtime.ManagedFile{
+			Path:     filepath.Join(boundary, "skills", rec.Name, "SKILL.md"),
+			Mode:     0o644,
+			Contents: body,
+		})
+	}
+	return out, nil
+}
+
+// readUserAuthJSON copies the user-level codex credentials into the
+// boundary so per-Agent CODEX_HOME does not require re-login. Missing
+// source returns (nil, nil); other IO errors return (nil, warning).
+func readUserAuthJSON(boundary string) (*runtime.ManagedFile, *model.Warning) {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return nil, nil
+	}
+	src := filepath.Join(home, ".codex", "auth.json")
+	data, err := os.ReadFile(src)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, &model.Warning{
+			Code:    "codex.auth-read-failed",
+			Message: "could not read user-level auth.json: " + err.Error(),
+		}
+	}
+	return &runtime.ManagedFile{
+		Path:     filepath.Join(boundary, "auth.json"),
+		Mode:     0o600,
+		Contents: data,
+	}, nil
 }
 
 // Boundary returns the per-Agent CODEX_HOME and env vars.
@@ -200,6 +482,13 @@ func (d *Driver) Boundary(ctx context.Context, agent *model.Agent) (runtime.Boun
 }
 
 // LaunchSpec describes how to spawn codex.
+//
+// Codex on Node-based installs (npm / nvm) starts via a `#!/usr/bin/env
+// node` shebang, so the spawned process needs PATH (and friends) to
+// resolve `node`. process.Runner replaces the child env wholesale when
+// spec.Env is non-empty, so we explicitly inherit the parent process
+// environment first and then override with our per-Agent boundary
+// values (chiefly CODEX_HOME).
 func (d *Driver) LaunchSpec(ctx context.Context, agent *model.Agent, plan *runtime.Plan) (runtime.LaunchSpec, error) {
 	facts, err := d.Facts(ctx)
 	if err != nil {
@@ -212,7 +501,7 @@ func (d *Driver) LaunchSpec(ctx context.Context, agent *model.Agent, plan *runti
 	if err != nil {
 		return runtime.LaunchSpec{}, err
 	}
-	env := map[string]string{}
+	env := inheritEnviron(os.Environ())
 	for k, v := range bnd.Env {
 		env[k] = v
 	}
@@ -222,6 +511,19 @@ func (d *Driver) LaunchSpec(ctx context.Context, agent *model.Agent, plan *runti
 		Env:   env,
 		Stdin: true,
 	}, nil
+}
+
+// inheritEnviron parses an os.Environ() slice into a map.
+func inheritEnviron(parent []string) map[string]string {
+	out := make(map[string]string, len(parent))
+	for _, e := range parent {
+		i := strings.IndexByte(e, '=')
+		if i <= 0 {
+			continue
+		}
+		out[e[:i]] = e[i+1:]
+	}
+	return out
 }
 
 // boundaryStateDir computes $AVM_HOME/boundaries/codex/<agent-name> with
@@ -326,25 +628,26 @@ func readSkillVersion(path string) string {
 }
 
 // scanMCPFromConfig pulls top-level `[mcp_servers.NAME]` sections out of
-// a config.toml. We don't need a full TOML parser — we only want the
-// section names so the user can see what runtime-global MCP exists.
+// a config.toml using a real TOML parser so nested sub-tables (e.g.
+// `[mcp_servers.gh.env]`) are not mistaken for independent servers.
 func scanMCPFromConfig(path string) []model.GlobalCapability {
 	out := []model.GlobalCapability{}
-	b, err := os.ReadFile(path)
+	raw, err := os.ReadFile(path)
 	if err != nil {
 		return out
 	}
-	for _, raw := range strings.Split(string(b), "\n") {
-		line := strings.TrimSpace(raw)
-		if !strings.HasPrefix(line, "[mcp_servers.") {
-			continue
-		}
-		line = strings.TrimSuffix(line, "]")
-		name := strings.TrimPrefix(line, "[mcp_servers.")
-		name = strings.Trim(name, "\"' ")
-		if name == "" {
-			continue
-		}
+	var doc struct {
+		MCPServers map[string]map[string]any `toml:"mcp_servers"`
+	}
+	if err := toml.Unmarshal(raw, &doc); err != nil {
+		return out
+	}
+	names := make([]string, 0, len(doc.MCPServers))
+	for name := range doc.MCPServers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
 		out = append(out, model.GlobalCapability{
 			Runtime: Name,
 			Kind:    model.CapabilityKindMCP,
@@ -381,21 +684,52 @@ func renderInstructions(a *model.Agent) string {
 	return b.String()
 }
 
-// renderConfigTOML emits a minimal Codex config.toml that records the
-// AVM-managed MCP server set. Skill bundling stays off so AVM controls
-// what skills are visible.
-func renderConfigTOML(a *model.Agent) string {
+// renderConfigTOML emits a Codex config.toml that:
+//  1. Disables Codex's bundled-with-binary skills (AVM controls skills).
+//  2. Emits a complete [mcp_servers.<name>] section for every Agent MCP,
+//     using the capstore record's Name (not the opaque ID) so codex
+//     surfaces tools as "<name>/<tool>".
+func renderConfigTOML(mcps []resolvedMCP) string {
 	var b strings.Builder
 	b.WriteString("# AVM-managed Codex config.toml\n")
 	b.WriteString("# Do not edit by hand; AVM rewrites this file on each run.\n\n")
 	b.WriteString("[skills.bundled]\n")
 	b.WriteString("enabled = false\n\n")
-	if len(a.MCP) > 0 {
-		b.WriteString("# MCP servers materialized from AVM Agent definition.\n")
-		for _, m := range a.MCP {
-			fmt.Fprintf(&b, "[mcp_servers.%q]\n", string(m.ID))
-			b.WriteString("# AVM capability reference — actual command wiring resolved by infra layer.\n\n")
+	if len(mcps) == 0 {
+		return b.String()
+	}
+	b.WriteString("# MCP servers materialized from AVM Agent definition.\n")
+	for _, m := range mcps {
+		fmt.Fprintf(&b, "[mcp_servers.%q]\n", m.Name)
+		if m.Cfg.Command != "" {
+			fmt.Fprintf(&b, "command = %q\n", m.Cfg.Command)
 		}
+		if len(m.Cfg.Args) > 0 {
+			b.WriteString("args = [")
+			for i, a := range m.Cfg.Args {
+				if i > 0 {
+					b.WriteString(", ")
+				}
+				fmt.Fprintf(&b, "%q", a)
+			}
+			b.WriteString("]\n")
+		}
+		if len(m.Cfg.Env) > 0 {
+			keys := make([]string, 0, len(m.Cfg.Env))
+			for k := range m.Cfg.Env {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			b.WriteString("env = { ")
+			for i, k := range keys {
+				if i > 0 {
+					b.WriteString(", ")
+				}
+				fmt.Fprintf(&b, "%q = %q", k, m.Cfg.Env[k])
+			}
+			b.WriteString(" }\n")
+		}
+		b.WriteString("\n")
 	}
 	return b.String()
 }

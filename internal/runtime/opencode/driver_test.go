@@ -3,6 +3,8 @@ package opencode
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -206,5 +208,82 @@ func TestLaunchSpec(t *testing.T) {
 	}
 	if _, ok := spec.Env[EnvStateDir]; !ok {
 		t.Fatalf("missing %s in env", EnvStateDir)
+	}
+}
+
+func TestExportGlobal_Skill(t *testing.T) {
+	stateDir := t.TempDir()
+	skillDir := filepath.Join(stateDir, "workspace", "skills", "tidy")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	body := "# tidy skill\n"
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(body), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	t.Setenv(EnvStateDir, stateDir)
+	t.Setenv("HOME", t.TempDir())
+
+	d := New()
+	exp, err := d.ExportGlobal(context.Background(), model.CapabilityKindSkill, "tidy")
+	if err != nil {
+		t.Fatalf("ExportGlobal: %v", err)
+	}
+	if exp.Format != model.PayloadFormatSkillMD || exp.Filename != "SKILL.md" {
+		t.Fatalf("bad metadata: %+v", exp)
+	}
+	got, _ := io.ReadAll(exp.Content)
+	exp.Content.Close()
+	if string(got) != body {
+		t.Fatalf("body mismatch")
+	}
+}
+
+func TestExportGlobal_MCP(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv(EnvStateDir, stateDir)
+	t.Setenv("HOME", t.TempDir())
+
+	cfg := map[string]any{
+		"mcp": map[string]any{
+			"servers": map[string]any{
+				"local-fs": map[string]any{
+					"command": "node",
+					"args":    []any{"./fs-server.js"},
+					"env":     map[string]any{"PATH": "/usr/bin"},
+				},
+			},
+		},
+	}
+	raw, _ := json.Marshal(cfg)
+	if err := os.WriteFile(filepath.Join(stateDir, "openclaw.json"), raw, 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	d := New()
+	exp, err := d.ExportGlobal(context.Background(), model.CapabilityKindMCP, "local-fs")
+	if err != nil {
+		t.Fatalf("ExportGlobal: %v", err)
+	}
+	out, _ := io.ReadAll(exp.Content)
+	exp.Content.Close()
+	var cfg2 runtime.MCPConfigV1
+	if err := json.Unmarshal(out, &cfg2); err != nil {
+		t.Fatalf("unmarshal: %v\n%s", err, out)
+	}
+	if cfg2.Command != "node" || len(cfg2.Args) != 1 || cfg2.Args[0] != "./fs-server.js" {
+		t.Fatalf("bad mcp config: %+v", cfg2)
+	}
+}
+
+func TestExportGlobal_NotFound(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv(EnvStateDir, stateDir)
+	t.Setenv("HOME", t.TempDir())
+
+	d := New()
+	_, err := d.ExportGlobal(context.Background(), model.CapabilityKindSkill, "ghost")
+	if !errors.Is(err, runtime.ErrGlobalCapabilityNotFound) {
+		t.Fatalf("expected ErrGlobalCapabilityNotFound, got %v", err)
 	}
 }
