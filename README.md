@@ -175,7 +175,7 @@ the full mapping.
 | Claude Code | Supported | Agent frontmatter, MCP, skills; pruned auth state carried into the boundary |
 | OpenCode | Supported | Config, agent, skills, and MCP mapping |
 | OpenClaw (龙虾) | In progress | Runtime research complete ([`docs/.../openclaw-runtime.md`](docs/engineering/runtime-research/openclaw-runtime.md)); driver not yet implemented |
-| Hermes Agent (爱马仕) | In progress | Listed in [`DESIGN.md`](DESIGN.md) as a target runtime; driver not yet implemented |
+| Hermes Agent (爱马仕) | In progress | Target runtime; driver not yet implemented |
 
 ## License
 

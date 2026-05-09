@@ -171,7 +171,7 @@ Agent 的每个字段标记为 `native`、`rendered_as_instructions`、`ignored`
 | Claude Code | 已支持 | 映射 agent frontmatter、MCP、skills；裁剪后的 auth state 会带入 boundary |
 | OpenCode | 已支持 | 映射 config、agent、skills 和 MCP |
 | OpenClaw（龙虾） | 在支持中 | runtime 调研完成（[`docs/.../openclaw-runtime.md`](docs/engineering/runtime-research/openclaw-runtime.md)），driver 尚未实现 |
-| Hermes Agent（爱马仕） | 在支持中 | 在 [`DESIGN.md`](DESIGN.md) 中列为目标 runtime，driver 尚未实现 |
+| Hermes Agent（爱马仕） | 在支持中 | 目标 runtime，driver 尚未实现 |
 
 ## License
 
