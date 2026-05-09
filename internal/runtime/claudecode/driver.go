@@ -344,6 +344,19 @@ func (d *Driver) Plan(ctx context.Context, agent *model.Agent) (*runtime.Plan, e
 		plan.Warnings = append(plan.Warnings, *warning)
 	}
 
+	// .claude.json: pruned auth/subscription/onboarding state.
+	// Claude Code identifies "logged in" via the oauthAccount field
+	// stored at HOME/.claude.json — without this copy each Agent's
+	// first launch would force a fresh OAuth round. We deliberately
+	// copy only the auth-shaped fields (see authStateKeys); per-user
+	// runtime state like `projects` and `skillUsage` stays out so the
+	// HOME boundary keeps doing its job.
+	if authFile, warning := readUserAuthState(bnd.StateDir); authFile != nil {
+		plan.Files = append(plan.Files, *authFile)
+	} else if warning != nil {
+		plan.Warnings = append(plan.Warnings, *warning)
+	}
+
 	plan.Mappings = append(plan.Mappings,
 		runtime.FieldMapping{
 			Field: "identity.name", Status: model.MappingNative,
@@ -499,6 +512,89 @@ func readUserLocalSettings(boundary string) (*runtime.ManagedFile, *model.Warnin
 		Path:     filepath.Join(boundary, "settings.local.json"),
 		Mode:     0o600,
 		Contents: data,
+	}, nil
+}
+
+// authStateKeys is the explicit allow-list of fields we copy out of
+// ~/.claude.json into the boundary. Claude Code identifies "logged in"
+// primarily via oauthAccount and subscription metadata stored at the
+// HOME-rooted ~/.claude.json — not via .credentials.json alone — so
+// per-Agent boundaries with HOME isolated would otherwise force a
+// fresh OAuth round on every Agent's first launch.
+//
+// We deliberately do NOT copy the rest of ~/.claude.json (projects,
+// skillUsage, sessions, seenNotifications, history caches): those are
+// per-user runtime state and copying them would defeat the boundary.
+// If a future field is needed for auth/onboarding, add it here; do
+// not switch to a deny-list.
+var authStateKeys = []string{
+	"oauthAccount",
+	"userID",
+	"hasAvailableSubscription",
+	"hasCompletedOnboarding",
+	"lastOnboardingVersion",
+	"firstStartTime",
+	"claudeCodeFirstTokenDate",
+	"installMethod",
+	"migrationVersion",
+	"opusProMigrationComplete",
+	"sonnet1m45MigrationComplete",
+	"hasResetAutoModeOptInForDefaultOffer",
+	"officialMarketplaceAutoInstallAttempted",
+	"officialMarketplaceAutoInstalled",
+}
+
+// readUserAuthState extracts auth/subscription/onboarding fields from
+// ~/.claude.json and writes a pruned copy at <boundary>/.claude.json.
+// Boundary HOME is <boundary>, so Claude Code reads exactly that file
+// on launch and sees the user as already logged in.
+//
+// Missing source returns (nil, nil); IO / parse errors degrade to a
+// Plan warning so the launch still proceeds (user just has to re-OAuth
+// inside the TUI for that one Agent).
+func readUserAuthState(boundary string) (*runtime.ManagedFile, *model.Warning) {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return nil, nil
+	}
+	src := filepath.Join(home, ".claude.json")
+	raw, err := os.ReadFile(src)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, &model.Warning{
+			Code:    "claude.auth-state-read-failed",
+			Message: "could not read user-level ~/.claude.json: " + err.Error(),
+		}
+	}
+	var full map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &full); err != nil {
+		return nil, &model.Warning{
+			Code:    "claude.auth-state-parse-failed",
+			Message: "could not parse user-level ~/.claude.json: " + err.Error(),
+		}
+	}
+	pruned := map[string]json.RawMessage{}
+	for _, k := range authStateKeys {
+		if v, ok := full[k]; ok {
+			pruned[k] = v
+		}
+	}
+	if len(pruned) == 0 {
+		return nil, nil
+	}
+	body, err := json.MarshalIndent(pruned, "", "  ")
+	if err != nil {
+		return nil, &model.Warning{
+			Code:    "claude.auth-state-render-failed",
+			Message: "could not render boundary ~/.claude.json: " + err.Error(),
+		}
+	}
+	return &runtime.ManagedFile{
+		Path:     filepath.Join(boundary, ".claude.json"),
+		Mode:     0o600,
+		Contents: body,
 	}, nil
 }
 

@@ -490,6 +490,112 @@ func TestPlan_DropsLeakedMCPWhenAgentHasNone(t *testing.T) {
 	t.Fatalf("settings.json missing")
 }
 
+func TestPlan_CopiesUserAuthState(t *testing.T) {
+	avmHome := t.TempDir()
+	t.Setenv("AVM_HOME", avmHome)
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	full := map[string]any{
+		// Whitelisted: must be copied.
+		"oauthAccount":             map[string]any{"emailAddress": "user@example.com", "accountUuid": "abc"},
+		"hasAvailableSubscription": true,
+		"hasCompletedOnboarding":   true,
+		"userID":                   "user-uuid",
+		// NOT whitelisted: must be dropped to keep boundaries isolated.
+		"projects":          map[string]any{"-home-xingzheng": map[string]any{"history": []any{"a", "b"}}},
+		"skillUsage":        map[string]any{"lark-doc": 5},
+		"seenNotifications": []any{"n1", "n2"},
+	}
+	rawFull, _ := json.Marshal(full)
+	if err := os.WriteFile(filepath.Join(home, ".claude.json"), rawFull, 0o600); err != nil {
+		t.Fatalf("write ~/.claude.json: %v", err)
+	}
+
+	d := New(nil)
+	plan, err := d.Plan(context.Background(), &model.Agent{
+		Identity: model.Identity{Name: "demo"},
+		Runtimes: []model.RuntimePref{{Runtime: Name}},
+	})
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	wantPath := filepath.Join(avmHome, "boundaries", Name, "demo", ".claude.json")
+	var got map[string]any
+	for _, f := range plan.Files {
+		if f.Path == wantPath {
+			if f.Mode != 0o600 {
+				t.Errorf("boundary .claude.json mode=%v want 0600", f.Mode)
+			}
+			if err := json.Unmarshal(f.Contents, &got); err != nil {
+				t.Fatalf("invalid JSON in boundary .claude.json: %v\n%s", err, f.Contents)
+			}
+			break
+		}
+	}
+	if got == nil {
+		t.Fatalf("expected boundary .claude.json at %s, got files=%+v", wantPath, plan.Files)
+	}
+	for _, k := range []string{"oauthAccount", "hasAvailableSubscription", "hasCompletedOnboarding", "userID"} {
+		if _, ok := got[k]; !ok {
+			t.Errorf("auth-state copy missing whitelisted key %q: %+v", k, got)
+		}
+	}
+	for _, k := range []string{"projects", "skillUsage", "seenNotifications"} {
+		if _, leaked := got[k]; leaked {
+			t.Errorf("non-whitelisted key %q leaked into boundary .claude.json: %+v", k, got)
+		}
+	}
+}
+
+func TestPlan_AuthStateAbsent_NoWarning(t *testing.T) {
+	t.Setenv("AVM_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir()) // no ~/.claude.json present
+
+	d := New(nil)
+	plan, err := d.Plan(context.Background(), &model.Agent{
+		Identity: model.Identity{Name: "demo"},
+		Runtimes: []model.RuntimePref{{Runtime: Name}},
+	})
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	for _, w := range plan.Warnings {
+		if w.Code == "claude.auth-state-read-failed" || w.Code == "claude.auth-state-parse-failed" {
+			t.Fatalf("missing ~/.claude.json should be silent, got warning %+v", w)
+		}
+	}
+}
+
+func TestPlan_BadAuthState_ProducesWarning(t *testing.T) {
+	t.Setenv("AVM_HOME", t.TempDir())
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := os.WriteFile(filepath.Join(home, ".claude.json"), []byte("{not valid"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	d := New(nil)
+	plan, err := d.Plan(context.Background(), &model.Agent{
+		Identity: model.Identity{Name: "demo"},
+		Runtimes: []model.RuntimePref{{Runtime: Name}},
+	})
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	var warned bool
+	for _, w := range plan.Warnings {
+		if w.Code == "claude.auth-state-parse-failed" {
+			warned = true
+			break
+		}
+	}
+	if !warned {
+		t.Fatalf("expected claude.auth-state-parse-failed warning, got %+v", plan.Warnings)
+	}
+}
+
 func TestPlan_BadUserSettings_ProducesWarning(t *testing.T) {
 	avmHome := t.TempDir()
 	t.Setenv("AVM_HOME", avmHome)
