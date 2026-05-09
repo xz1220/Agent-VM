@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 set -eu
 
-repo="${AVM_REPO:-xz1220/Agent-VM}"
+repo="${AVM_REPO:-xz1220/AVM}"
 version="${AVM_VERSION:-latest}"
 install_dir="${AVM_INSTALL_DIR:-$HOME/.local/bin}"
 source_dir="${AVM_INSTALL_SOURCE_DIR:-}"

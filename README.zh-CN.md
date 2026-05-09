@@ -3,7 +3,7 @@
 > Agent VM——为 AI Coding Agent 定义一次配置，跑在任何 runtime 上。
 
 <p>
-  <a href="https://github.com/xz1220/Agent-VM/actions/workflows/ci.yml"><img src="https://github.com/xz1220/Agent-VM/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/xz1220/AVM/actions/workflows/ci.yml"><img src="https://github.com/xz1220/AVM/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <img src="https://img.shields.io/badge/status-early_preview-0f766e" alt="状态：早期预览">
   <img src="https://img.shields.io/badge/runtime-Codex%20%7C%20Claude%20Code%20%7C%20OpenCode-1d4ed8" alt="目标 Runtime">
   <img src="https://img.shields.io/badge/lang-Go%20%2B%20TypeScript-00ADD8" alt="开发语言">
@@ -46,7 +46,7 @@ AVM 由两个互相配套的二进制组成：
 ## 安装
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/xz1220/Agent-VM/main/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/xz1220/AVM/main/scripts/install.sh | sh
 avm init
 avm shell install            # 可选：为 bash/zsh/fish 安装补全
 ```
@@ -167,16 +167,16 @@ AVM 采用 [PolyForm Noncommercial License 1.0.0](LICENSE) 协议。
 
 感谢每一位为 AVM 做出贡献的开发者。
 
-<a href="https://github.com/xz1220/Agent-VM/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=xz1220/Agent-VM" alt="Contributors" />
+<a href="https://github.com/xz1220/AVM/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=xz1220/AVM" alt="Contributors" />
 </a>
 
 ## Star History
 
-<a href="https://star-history.com/#xz1220/Agent-VM&Date">
+<a href="https://star-history.com/#xz1220/AVM&Date">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=xz1220/Agent-VM&type=Date&theme=dark" />
-    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=xz1220/Agent-VM&type=Date" />
-    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=xz1220/Agent-VM&type=Date" />
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=xz1220/AVM&type=Date&theme=dark" />
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=xz1220/AVM&type=Date" />
+    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=xz1220/AVM&type=Date" />
   </picture>
 </a>

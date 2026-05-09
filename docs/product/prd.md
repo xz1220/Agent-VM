@@ -375,7 +375,7 @@ Memory 已从当前 AVM 产品模型中删除。
 ### 5.1 新用户首次创建 Agent
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/xz1220/Agent-VM/main/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/xz1220/AVM/main/scripts/install.sh | sh
 avm agent create
 avm run backend-coder
 ```

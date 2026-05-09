@@ -3,7 +3,7 @@
 > Agent VM — define an AI coding agent once, run it on any runtime.
 
 <p>
-  <a href="https://github.com/xz1220/Agent-VM/actions/workflows/ci.yml"><img src="https://github.com/xz1220/Agent-VM/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/xz1220/AVM/actions/workflows/ci.yml"><img src="https://github.com/xz1220/AVM/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <img src="https://img.shields.io/badge/status-early_preview-0f766e" alt="Status: early preview">
   <img src="https://img.shields.io/badge/runtime-Codex%20%7C%20Claude%20Code%20%7C%20OpenCode-1d4ed8" alt="Supported runtime targets">
   <img src="https://img.shields.io/badge/lang-Go%20%2B%20TypeScript-00ADD8" alt="Languages">
@@ -48,7 +48,7 @@ The detailed mapping between this picture and the source tree lives in
 ## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/xz1220/Agent-VM/main/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/xz1220/AVM/main/scripts/install.sh | sh
 avm init
 avm shell install            # optional: bash/zsh/fish completion
 ```
@@ -173,16 +173,16 @@ maintainer.
 
 Thanks to everyone who has helped build AVM.
 
-<a href="https://github.com/xz1220/Agent-VM/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=xz1220/Agent-VM" alt="Contributors" />
+<a href="https://github.com/xz1220/AVM/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=xz1220/AVM" alt="Contributors" />
 </a>
 
 ## Star History
 
-<a href="https://star-history.com/#xz1220/Agent-VM&Date">
+<a href="https://star-history.com/#xz1220/AVM&Date">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=xz1220/Agent-VM&type=Date&theme=dark" />
-    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=xz1220/Agent-VM&type=Date" />
-    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=xz1220/Agent-VM&type=Date" />
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=xz1220/AVM&type=Date&theme=dark" />
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=xz1220/AVM&type=Date" />
+    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=xz1220/AVM&type=Date" />
   </picture>
 </a>
