@@ -1,34 +1,75 @@
 package runtime
 
 import (
-	"github.com/xz1220/agent-vm/internal/adapter"
-	"github.com/xz1220/agent-vm/internal/adapter/claude"
-	"github.com/xz1220/agent-vm/internal/adapter/cline"
-	"github.com/xz1220/agent-vm/internal/adapter/codex"
-	"github.com/xz1220/agent-vm/internal/adapter/cursor"
-	"github.com/xz1220/agent-vm/internal/adapter/opencode"
+	"errors"
+	"fmt"
+	"sort"
+	"sync"
 )
 
-type Registry struct {
-	adapters map[string]adapter.Adapter
+// Registry resolves a runtime name to a Driver and lists known drivers.
+// Application layer never imports a specific driver package directly.
+type Registry interface {
+	Resolve(name string) (Driver, error)
+	List() []DriverInfo
 }
 
-func NewRegistry() *Registry {
-	return &Registry{
-		adapters: map[string]adapter.Adapter{
-			"claude-code": claude.New(),
-			"cline":       cline.New(),
-			"codex":       codex.New(),
-			"cursor":      cursor.New(),
-			"opencode":    opencode.New(),
-		},
-	}
+// DriverInfo is a non-Driver projection used by listings/diagnostics.
+type DriverInfo struct {
+	Name string
 }
 
-func (r *Registry) Get(runtime string) (adapter.Adapter, bool) {
-	if r == nil {
-		return nil, false
+// ErrUnknownRuntime is returned by Registry.Resolve for unknown names.
+var ErrUnknownRuntime = errors.New("runtime: unknown")
+
+// MapRegistry is a default in-memory Registry implementation.
+type MapRegistry struct {
+	mu      sync.RWMutex
+	drivers map[string]Driver
+}
+
+// NewRegistry constructs an empty MapRegistry. Callers register
+// drivers with Register before resolving.
+func NewRegistry() *MapRegistry { return &MapRegistry{drivers: map[string]Driver{}} }
+
+// Register associates name -> driver. It is an error to register the
+// same name twice; that signals a wiring bug.
+func (r *MapRegistry) Register(d Driver) error {
+	if d == nil {
+		return errors.New("registry: nil driver")
 	}
-	adp, ok := r.adapters[runtime]
-	return adp, ok && adp != nil
+	name := d.Name()
+	if name == "" {
+		return errors.New("registry: empty driver name")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, exists := r.drivers[name]; exists {
+		return fmt.Errorf("registry: %q already registered", name)
+	}
+	r.drivers[name] = d
+	return nil
+}
+
+// Resolve implements Registry.
+func (r *MapRegistry) Resolve(name string) (Driver, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	d, ok := r.drivers[name]
+	if !ok {
+		return nil, fmt.Errorf("%w: %q", ErrUnknownRuntime, name)
+	}
+	return d, nil
+}
+
+// List implements Registry.
+func (r *MapRegistry) List() []DriverInfo {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]DriverInfo, 0, len(r.drivers))
+	for name := range r.drivers {
+		out = append(out, DriverInfo{Name: name})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
 }

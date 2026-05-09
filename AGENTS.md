@@ -2,7 +2,14 @@
 
 ## Project Structure & Module Organization
 
-Agent VM is a Go CLI project. The executable entrypoint and Cobra commands live in `cmd/avm/`. Shared packages are under `internal/`, grouped by concern: `config`, `adapter`, `sync`, `runtime`, `state`, and `packageio`. Long-form documentation lives in `docs/`, with engineering details in `docs/engineering/`. Use `fixtures/` for realistic sample AVM homes and runtime layouts, and `testdata/` for stable inputs and expected outputs. Visual README assets are in `assets/`; developer scripts are in `scripts/`.
+Agent VM is a Go CLI project. `cmd/avm/main.go` is the only composition root: it wires concrete infra + runtime drivers into a `service.Container` and hands the CLI a single `Deps`. Shared packages under `internal/` follow the four-layer split documented in `docs/rewrite-architecture-proposal.md`:
+
+- `internal/app/{model,service}` — AVM-stable product model and use-case orchestration (AgentService, RunService, PackageService, CapabilityService, DiagnosticsService).
+- `internal/runtime/{driver,registry,types}` plus `internal/runtime/{codex,claudecode,opencode}` — RuntimeDriver per runtime, owning facts/adapter/boundary/launcher.
+- `internal/infra/{home,agentstore,capstore,packageio,runlog,process,managedfile,fsutil}` — filesystem and process side effects.
+- `internal/presentation/{cli,render}` — cobra commands, huh-powered interactive flows, and rendering helpers.
+
+Long-form documentation lives in `docs/`, with engineering details in `docs/engineering/`. `docs/legacy-architecture.md` is historical and not maintained. Use `fixtures/` for realistic sample AVM homes and runtime layouts, and `testdata/` for stable inputs and expected outputs. Visual README assets are in `assets/`; developer scripts are in `scripts/`.
 
 ## Build, Test, and Development Commands
 
@@ -32,21 +39,6 @@ Implementation plans should name the owning abstraction, the data boundary, and 
 When the user is exploring an idea or asking for judgment, use Socratic
 clarifying questions before forcing a conclusion. Prefer 1-3 targeted questions
 that expose assumptions, constraints, tradeoffs, or decision criteria.
-
-Every final response at the end of a turn must be logically auditable. This is
-a collaboration rule, not a tool-use rule. Even if the agent used tools during
-the turn, the final response should explain the outcome with visible reasoning
-structure:
-
-- `Question`: restate the user's actual question or decision.
-- `Premises`: list the key facts, assumptions, or constraints being used.
-- `Reasoning`: explain the inference in clear steps, without exposing private chain-of-thought.
-- `Conclusion`: state the answer or recommendation directly.
-- `Uncertainty`: name what is unknown, what could change the conclusion, or what needs confirmation.
-
-For very small answers, this structure may be compressed into a short paragraph
-or a compact subset of headings, but the answer should still distinguish
-evidence, inference, conclusion, and uncertainty.
 
 ## Testing Guidelines
 
