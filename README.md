@@ -10,7 +10,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-PolyForm--NC%201.0.0-6b21a8" alt="License: PolyForm Noncommercial 1.0.0"></a>
 </p>
 
-English | [简体中文](README.zh-CN.md)
+English | [Simplified Chinese](README.zh-CN.md)
 
 ## Introduction
 
@@ -151,8 +151,8 @@ the full mapping.
 | Codex | Supported | Native profile/model/reasoning mapping; isolated `CODEX_HOME` per run |
 | Claude Code | Supported | Agent frontmatter, MCP, skills; pruned auth state carried into the boundary |
 | OpenCode | Supported | Config, agent, skills, and MCP mapping |
-| OpenClaw (龙虾) | In progress | Runtime research complete ([`docs/.../openclaw-runtime.md`](docs/engineering/runtime-research/openclaw-runtime.md)); driver not yet implemented |
-| Hermes Agent (爱马仕) | In progress | Target runtime; driver not yet implemented |
+| OpenClaw | In progress | Runtime research complete ([`docs/.../openclaw-runtime.md`](docs/engineering/runtime-research/openclaw-runtime.md)); driver not yet implemented |
+| Hermes Agent | In progress | Target runtime; driver not yet implemented |
 
 ## License
 
