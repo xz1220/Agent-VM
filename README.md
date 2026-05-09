@@ -1,248 +1,192 @@
-<p align="center">
-  <img src="assets/avm-hero.svg" alt="Agent VM: one profile, every agent runtime" width="100%">
-</p>
+# AVM
 
-<h1 align="center">Agent VM</h1>
+> Agent VM — define an AI coding agent once, run it on any runtime.
 
-<p align="center">
-  <strong>Manage AI agent profiles across runtimes.</strong>
-  <br>
-  Create reusable agent configurations and apply them to Codex, Claude Code, OpenCode, Cline, or Cursor.
-</p>
-
-<p align="center">
+<p>
   <a href="https://github.com/xz1220/Agent-VM/actions/workflows/ci.yml"><img src="https://github.com/xz1220/Agent-VM/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <img src="https://img.shields.io/badge/status-early_preview-0f766e" alt="Status: early preview">
   <img src="https://img.shields.io/badge/runtime-Codex%20%7C%20Claude%20Code%20%7C%20OpenCode-1d4ed8" alt="Supported runtime targets">
-  <img src="https://img.shields.io/badge/language-Go-00ADD8" alt="Go">
+  <img src="https://img.shields.io/badge/lang-Go%20%2B%20TypeScript-00ADD8" alt="Languages">
+  <img src="https://img.shields.io/badge/license-PolyForm--NC%20(proposed)-6b21a8" alt="License: PolyForm Noncommercial (proposed)">
 </p>
 
-<p align="center">
-  English | <a href="README.zh-CN.md">简体中文</a>
-</p>
+English | [简体中文](README.zh-CN.md)
 
-Agent VM, or `avm`, is a local manager for AI coding agent configuration. It gives
-users a small set of durable objects:
+## Introduction
 
-- **Agent**: a reusable agent profile with instructions, skills, MCP servers,
-  and runtime configuration.
-- **Environment**: an internal default context. Users do not create, switch, or
-  manage Environments in the product path.
-- **Package**: a distributable bundle that can install agents and their
-  referenced capabilities.
-- **Runtime**: the target tool where an agent runs, such as Codex,
-  Claude Code, OpenCode, Cline, or Cursor.
+AVM (`avm`) is a local config manager for AI coding agents. You build a
+reusable **Agent** — instructions, skills, MCP servers, runtime preferences —
+and AVM applies it to whichever target runtime you launch. AVM owns the
+managed config, reports what each runtime can natively express, and keeps the
+files you hand-edit out of its way.
 
-In daily use, create or install an Agent, then run that Agent. Skills are
-configured while creating or editing an Agent; AVM handles runtime detection and
-per-run managed config for you.
+The objects you'll see day-to-day:
 
-## Daily Path
+- **Agent** — your reusable working profile; the only object you create or
+  edit directly.
+- **Capability** — a skill or MCP server an Agent references. AVM discovers
+  the ones already installed in your runtimes and imports them.
+- **Package** — a `.avm.zip` bundle exporting an Agent (and its
+  capabilities) for sharing or reinstalling.
+- **Runtime** — the target tool that actually runs the Agent.
 
-```bash
-avm create
-avm run backend-coder
+AVM ships as two binaries that pair together:
+
+- **`avm`** — the Go CLI, non-interactive plumbing. Every command takes
+  flags or stdin, emits human text or `--json`. Use it from scripts and CI.
+- **`avm-ui`** — the TypeScript full-screen TUI in [`ui/`](ui/) that shells
+  out to `avm` over the JSON contract. Use it for interactive editing and
+  browsing.
+
+## Architecture
+
+```
+   avm-ui  (TypeScript, Ink TUI)        avm  (Go, --json plumbing)
+   interactive editing & browsing  ───▶  scripts, CI, programmatic use
+                                              │
+                                              │   one CLI contract
+                                              ▼
+                                   ┌──────────────────────┐
+                                   │ Application Services │
+                                   │ Agent · Run · Package│
+                                   │ Capability · System  │
+                                   └──────────┬───────────┘
+                                              │
+                              ┌───────────────┴───────────────┐
+                              ▼                               ▼
+                    ┌──────────────────┐            ┌──────────────────┐
+                    │ Runtime Drivers  │            │ Infrastructure   │
+                    │  codex           │            │  home, agentstore│
+                    │  claude-code     │            │  capstore, runlog│
+                    │  opencode        │            │  managedfile, …  │
+                    └────────┬─────────┘            └──────────────────┘
+                             ▼
+              Codex · Claude Code · OpenCode · …
+              (managed config + launch)
 ```
 
-The intended path is simple:
+The detailed mapping between this picture and the source tree lives in
+[`docs/engineering/architecture-overview.md`](docs/engineering/architecture-overview.md).
 
-1. Install and initialize AVM.
-2. Create an Agent profile with the current preview wizard.
-3. Run an Agent.
-
-```text
-Blank/default / existing Package
-  -> create Agent
-    -> run Agent
-      -> runtime-specific managed config
-        -> Codex / Claude Code / OpenCode / Cline / Cursor
-```
-
-## User Modules
-
-### 1. Install, Initialize, And Uninstall
-
-This module owns AVM's lifecycle on the machine.
-
-Current preview:
+## Install
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/xz1220/Agent-VM/main/scripts/install.sh | sh
 avm init
-avm shell init zsh
+avm shell install            # optional: bash/zsh/fish completion
 ```
 
-The installer puts `avm` in `$HOME/.local/bin` by default, installs shell
-integration into your shell rc file, and initializes `~/.avm` unless
-`AVM_SKIP_INIT=1` is set.
+The installer drops `avm` into `$HOME/.local/bin` and initializes `~/.avm`
+unless you pass `AVM_SKIP_INIT=1`.
 
-Product target:
+To build from source:
 
 ```bash
-avm init
-avm doctor
-avm uninstall
-avm shell install
-avm shell uninstall
+make build         # bin/avm
+make build-ui      # dist/avm-ui.js (interactive TUI)
+make build-all
 ```
 
-### 2. Agent Configuration
+## User Manual
 
-Agent configuration is the primary product surface. An Agent owns its skills,
-MCP servers, instructions, and runtime configuration.
+### 1. Pull existing skills/MCP into AVM
 
-Current preview:
+The first time you use AVM on a machine, import whatever your runtimes
+already have so Agents can reference them:
 
 ```bash
-avm create
-avm create backend-coder
-avm create --from default --name api-coder
+avm capability bootstrap --runtime claude-code
+avm capability bootstrap --runtime codex
+avm capability list
+```
 
-avm agent create backend-coder --runtime codex --skills git,test
-avm agent clone backend-coder --name backend-reviewer
-avm agent edit backend-reviewer
-avm agent rename backend-reviewer reviewer --update-refs
-avm agent delete reviewer --force
+### 2. Create an Agent
+
+Flag-driven (the CLI never prompts; use `avm-ui` if you want a wizard):
+
+```bash
+avm agent create \
+  --name backend-coder \
+  --runtime codex \
+  --description "API + DB work on the order service" \
+  --skill git --skill test
+```
+
+### 3. Inspect and edit
+
+```bash
 avm agent list
 avm agent show backend-coder
-avm agent show backend-coder --runtime codex
+avm agent show backend-coder --runtime codex   # how each field maps to the runtime
+avm agent edit backend-coder --skill git --skill test --skill review
+avm agent clone backend-coder --name backend-reviewer
+avm agent rename backend-reviewer reviewer
+avm agent delete reviewer --yes
 ```
 
-Agent CRUD surface:
+`agent edit` is non-interactive: any list flag (`--skill`, `--mcp`,
+`--runtime`) **replaces** the current list. To preserve current values, read
+them first with `avm agent show <name> --json`.
 
-```bash
-avm agent create
-avm agent list
-avm agent show <name>
-avm agent edit <name>
-avm agent delete <name>
-avm agent clone <name> --name <new-name>
-avm agent rename <old-name> <new-name>
-```
-
-`avm create` remains the first-run wizard and shortcut entry. It should create an
-Agent from one of these sources:
-
-- a blank/default Agent
-- an existing Package created by the user or already installed
-
-When creating or editing an Agent, the skills and MCP picker should show the
-current full inventory: AVM-managed capabilities plus user-installed
-runtime-global capabilities discovered from supported runtimes.
-
-### 3. Default Environment
-
-Environment management is not a user module in the current product path. AVM
-only keeps one internal default Environment.
-
-Users should not create, switch, delete, export, or install Environments. An
-Environment does not map runtimes to Agents, because each Agent already owns its
-runtime configuration.
-
-Packages do not install, export, or carry Environment metadata.
-
-### 4. Run Agent
-
-This is the daily execution surface.
+### 4. Run
 
 ```bash
 avm run backend-coder
-avm run backend-coder --runtime codex
+avm run backend-coder --runtime codex      # required when the Agent has multiple runtimes
+avm run backend-coder --preview            # show the plan; do not launch
+avm run backend-coder --drift merge        # acknowledge drift between AVM and existing managed config
 ```
 
-`avm run` is command-scoped. It does not create a user-managed long-running
-state and does not require cleanup.
+`avm run` propagates the runtime's exit code so shell scripts can branch on
+it.
 
-### 5. Packages
-
-Packages are for distribution and reuse. Users install packages to get Agents
-and referenced capabilities; they do not run a package directly.
-Packages do not install, export, or carry Environment metadata.
-
-Current preview:
+### 5. Share via Packages
 
 ```bash
+avm package export backend-coder -o backend-coder.avm.zip
+avm package install ./backend-coder.avm.zip --on-conflict rename
+avm package inspect ./backend-coder.avm.zip
 avm package list
-avm package show reviewer
-avm package inspect backend-coder.avm.zip
-avm export backend-coder --output backend-coder.avm.zip
-avm install backend-coder.avm.zip
+avm package uninstall backend-coder --yes
 ```
 
-Product target:
+### 6. Diagnose
 
 ```bash
-avm package list
-avm package show <package>
-avm package install <package-or-file>
-avm package uninstall <package>
-avm package export <agent>
-avm package inspect <file.avm.zip>
+avm doctor                  # AVM home, runtimes, recent runs
+avm status [agent]
+avm runtime list            # registered runtimes with availability
 ```
+
+Every command above accepts `--json` and emits a model from
+[`internal/app/model/`](internal/app/model/). The exact JSON shape, error
+codes, and exit-code semantics live in [`docs/api/cli-protocol.md`](docs/api/cli-protocol.md).
 
 ## Runtime Support
 
-AVM renders the selected Agent into runtime-specific managed files.
+AVM renders the selected Agent into runtime-specific managed files. Each
+driver reports every Agent field as `native`, `rendered_as_instructions`,
+`ignored`, or `unsupported` — `avm agent show <name> --runtime <rt>` shows
+the full mapping.
 
 | Runtime | Status | Notes |
 | --- | --- | --- |
-| Codex | Supported | Native profile/model/reasoning mapping where available |
-| Claude Code | Supported | Agent frontmatter and MCP/skills mapping |
+| Codex | Supported | Native profile/model/reasoning mapping; isolated `CODEX_HOME` per run |
+| Claude Code | Supported | Agent frontmatter, MCP, skills; pruned auth state carried into the boundary |
 | OpenCode | Supported | Config, agent, skills, and MCP mapping |
-| Cline | Compatibility | Mostly rendered as rules/MCP settings |
-| Cursor | Compatibility | Conservative rules/MCP proof of concept |
-
-Adapters must report each field as `native`, `rendered_as_instructions`,
-`ignored`, or `unsupported`. AVM should not pretend every runtime supports the
-same feature set.
-
-## Current Preview Gaps
-
-The product surface is not finished.
-
-| Area | Available today | Gap |
-| --- | --- | --- |
-| Agent | `create`, `list`, `show`, `edit`, `delete`, `rename`, `clone` | richer first-run/package-backed create flow and interactive polish |
-| Environment | internal default only | no user-facing Environment module |
-| Install lifecycle | installer, `init`, `shell init` | missing first-class doctor/uninstall commands |
-| Package | list/show/inspect/export/install | install/export naming still split across commands |
-| Skills | `skill list` | should be surfaced primarily inside Agent create/edit |
-| Sync | `sync` | should disappear behind `run` |
-
-## Safety Model
-
-AVM is conservative by default:
-
-- installer initialization and `avm init` write under `~/.avm`.
-- Agent config should become an explicit CRUD resource, not implicit overwrites.
-- Runtime-native files are written only through adapter-declared managed paths.
-- Unsupported runtime fields are reported, not silently dropped.
-- Secrets should be referenced through environment variables, not exported as
-  plaintext profile data.
-
-## Development
-
-```bash
-make test
-make vet
-make fmt
-make build
-```
-
-The main package is `cmd/avm`. Core packages live under `internal/config`,
-`internal/adapter`, `internal/sync`, `internal/runtime`, `internal/state`, and
-`internal/packageio`.
-
-Useful project docs:
-
-- [Product requirements](docs/product/prd.md)
-- [Technical design](docs/design/tech-design.md)
-- [Architecture](docs/engineering/architecture.md)
-- [Data model](docs/engineering/data-model.md)
-- [Implementation plan](docs/engineering/implementation-plan.md)
-- [Acceptance criteria](docs/engineering/acceptance.md)
+| OpenClaw (龙虾) | In progress | Runtime research complete ([`docs/.../openclaw-runtime.md`](docs/engineering/runtime-research/openclaw-runtime.md)); driver not yet implemented |
+| Hermes Agent (爱马仕) | In progress | Listed in [`DESIGN.md`](DESIGN.md) as a target runtime; driver not yet implemented |
 
 ## License
 
-No open-source license has been selected yet. Until a license is added, the code
-is source-available but not broadly reusable under an open-source license.
+No license has been chosen yet, so the code is currently source-available
+but not licensed for redistribution.
+
+**Proposed:** [PolyForm Noncommercial 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0/).
+It is purpose-built for source code and matches the project's intent —
+allow anyone to copy, modify, distribute, and learn from the code for
+non-commercial purposes; commercial use requires a separate license.
+
+Alternatives considered: CC BY-NC 4.0 (not designed for code), BUSL (good
+for delayed open-source but more complex to operate). PolyForm-NC is the
+clearer fit until commercial-licensing requirements are decided.
