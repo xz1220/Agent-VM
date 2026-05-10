@@ -3,7 +3,7 @@ VERSION ?= 0.0.0-dev
 COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 NPM ?= npm
-NPM_CI_FLAGS ?= --no-audit --no-fund --progress=false
+NPM_CI_FLAGS ?= --no-audit --no-fund --progress=false --ignore-scripts
 LDFLAGS := -X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.date=$(DATE)
 
 .PHONY: build build-ui build-all test fmt vet clean
