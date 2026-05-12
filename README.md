@@ -1,6 +1,6 @@
 # AVM
 
-> Agent VM — define an AI coding agent once, run it on any runtime.
+> Agent VM — define an AI agent once, run it on any runtime.
 
 ![AVM mascot routing one Agent config to multiple coding runtimes](assets/avm-mascot-hero.png)
 
