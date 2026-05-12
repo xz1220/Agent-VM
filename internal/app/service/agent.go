@@ -9,9 +9,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/xz1220/agent-vm/internal/app/model"
 	"github.com/xz1220/agent-vm/internal/infra/agentstore"
+	"github.com/xz1220/agent-vm/internal/infra/capstore"
 	"github.com/xz1220/agent-vm/internal/runtime"
 )
 
@@ -30,11 +32,16 @@ type AgentService interface {
 type Agents struct {
 	Repo     agentstore.Repository
 	Runtimes runtime.Registry
+	Caps     capstore.Store
 }
 
 // NewAgents constructs the default AgentService.
-func NewAgents(repo agentstore.Repository, registry runtime.Registry) *Agents {
-	return &Agents{Repo: repo, Runtimes: registry}
+func NewAgents(repo agentstore.Repository, registry runtime.Registry, caps ...capstore.Store) *Agents {
+	var store capstore.Store
+	if len(caps) > 0 {
+		store = caps[0]
+	}
+	return &Agents{Repo: repo, Runtimes: registry, Caps: store}
 }
 
 // withOverwrite temporarily flips r.Overwrite to v if r is an *FSRepo,
@@ -73,11 +80,81 @@ func requireRuntimePrefs(prefs []model.RuntimePref, hint string) error {
 	return nil
 }
 
+func (s *Agents) resolveCapabilityRefs(refs []model.CapabilityRef, kind model.CapabilityKind) ([]model.CapabilityRef, error) {
+	if len(refs) == 0 || s.Caps == nil {
+		return refs, nil
+	}
+	out := make([]model.CapabilityRef, len(refs))
+	copy(out, refs)
+	for i := range out {
+		if out[i].Kind == "" {
+			out[i].Kind = kind
+		}
+		if out[i].ID == "" || strings.HasPrefix(string(out[i].ID), "cap_") {
+			continue
+		}
+		id, err := s.resolveCapabilityName(out[i].Kind, string(out[i].ID))
+		if err != nil {
+			return nil, err
+		}
+		out[i].ID = id
+	}
+	return out, nil
+}
+
+func (s *Agents) resolveCapabilityName(kind model.CapabilityKind, name string) (model.CapabilityID, error) {
+	recs, err := s.Caps.List()
+	if err != nil {
+		return "", WrapError(CodeIOFailure, err,
+			"list capability store: "+err.Error(), nil)
+	}
+	var matches []model.CapabilityRecord
+	for _, rec := range recs {
+		if rec.Kind == kind && rec.Name == name {
+			matches = append(matches, rec)
+		}
+	}
+	switch len(matches) {
+	case 0:
+		return "", NewError(CodeCapabilityNotFound,
+			fmt.Sprintf("unknown %s %q", kind, name),
+			map[string]any{"kind": string(kind), "name": name})
+	case 1:
+		return matches[0].ID, nil
+	default:
+		candidates := make([]map[string]any, 0, len(matches))
+		for _, rec := range matches {
+			candidates = append(candidates, map[string]any{
+				"id":          string(rec.ID),
+				"kind":        string(rec.Kind),
+				"name":        rec.Name,
+				"source":      string(rec.Source),
+				"import_from": rec.ImportFrom,
+			})
+		}
+		return "", NewError(CodeCapabilityConflict,
+			fmt.Sprintf("%s name %q is ambiguous; specify a capability ID", kind, name),
+			map[string]any{
+				"kind":       string(kind),
+				"name":       name,
+				"candidates": candidates,
+			})
+	}
+}
+
 // Create implements PRD §4.2: explicit conflict resolution; never an
 // implicit overwrite.
 func (s *Agents) Create(ctx context.Context, req model.CreateAgentRequest) (*model.Agent, error) {
 	if s.Repo == nil {
 		return nil, errors.New("agents: missing repository")
+	}
+	skills, err := s.resolveCapabilityRefs(req.Skills, model.CapabilityKindSkill)
+	if err != nil {
+		return nil, err
+	}
+	mcp, err := s.resolveCapabilityRefs(req.MCP, model.CapabilityKindMCP)
+	if err != nil {
+		return nil, err
 	}
 	agent := &model.Agent{
 		Identity: model.Identity{
@@ -86,8 +163,8 @@ func (s *Agents) Create(ctx context.Context, req model.CreateAgentRequest) (*mod
 			Role:        req.Role,
 		},
 		Instructions: req.Instructions,
-		Skills:       req.Skills,
-		MCP:          req.MCP,
+		Skills:       skills,
+		MCP:          mcp,
 		Runtimes:     req.Runtimes,
 	}
 	if err := agent.Validate(); err != nil {
@@ -235,10 +312,18 @@ func (s *Agents) Edit(ctx context.Context, req model.EditAgentRequest) (*model.A
 		agent.Instructions = *req.Instructions
 	}
 	if req.Skills != nil {
-		agent.Skills = *req.Skills
+		refs, err := s.resolveCapabilityRefs(*req.Skills, model.CapabilityKindSkill)
+		if err != nil {
+			return nil, err
+		}
+		agent.Skills = refs
 	}
 	if req.MCP != nil {
-		agent.MCP = *req.MCP
+		refs, err := s.resolveCapabilityRefs(*req.MCP, model.CapabilityKindMCP)
+		if err != nil {
+			return nil, err
+		}
+		agent.MCP = refs
 	}
 	if req.Runtimes != nil {
 		agent.Runtimes = *req.Runtimes

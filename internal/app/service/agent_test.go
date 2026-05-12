@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/xz1220/agent-vm/internal/app/model"
 	"github.com/xz1220/agent-vm/internal/infra/agentstore"
+	"github.com/xz1220/agent-vm/internal/infra/capstore"
 	"github.com/xz1220/agent-vm/internal/runtime"
 )
 
@@ -196,6 +198,86 @@ func TestAgents_Create_InvalidName(t *testing.T) {
 	}
 }
 
+func TestAgents_Create_ResolvesSkillName(t *testing.T) {
+	repo := agentstore.New(t.TempDir())
+	caps := capstore.New(t.TempDir())
+	id, err := caps.Add(model.CapabilityRecord{
+		Kind: model.CapabilityKindSkill,
+		Name: "review",
+	}, bytes.NewReader([]byte("# review\n")))
+	if err != nil {
+		t.Fatalf("caps.Add: %v", err)
+	}
+	s := NewAgents(repo, runtime.NewRegistry(), caps)
+	agent, err := s.Create(context.Background(), model.CreateAgentRequest{
+		Name:     "alpha",
+		Skills:   []model.CapabilityRef{{ID: model.CapabilityID("review"), Kind: model.CapabilityKindSkill}},
+		Runtimes: []model.RuntimePref{{Runtime: "fake"}},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if len(agent.Skills) != 1 || agent.Skills[0].ID != id {
+		t.Fatalf("skills=%+v want %s", agent.Skills, id)
+	}
+	got, err := repo.Get("alpha")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Skills[0].ID != id {
+		t.Fatalf("persisted skill=%s want %s", got.Skills[0].ID, id)
+	}
+}
+
+func TestAgents_Create_UnknownSkillNameFailsBeforeSave(t *testing.T) {
+	repo := agentstore.New(t.TempDir())
+	s := NewAgents(repo, runtime.NewRegistry(), capstore.New(t.TempDir()))
+	_, err := s.Create(context.Background(), model.CreateAgentRequest{
+		Name:     "alpha",
+		Skills:   []model.CapabilityRef{{ID: model.CapabilityID("missing"), Kind: model.CapabilityKindSkill}},
+		Runtimes: []model.RuntimePref{{Runtime: "fake"}},
+	})
+	if err == nil {
+		t.Fatal("expected unknown skill error")
+	}
+	se := AsError(err)
+	if se == nil || se.Code != CodeCapabilityNotFound {
+		t.Fatalf("expected CAPABILITY_NOT_FOUND, got %T %v", err, err)
+	}
+	if repo.Exists("alpha") {
+		t.Fatal("agent should not be persisted when skill resolution fails")
+	}
+}
+
+func TestAgents_Create_AmbiguousSkillNameFailsBeforeSave(t *testing.T) {
+	repo := agentstore.New(t.TempDir())
+	caps := capstore.New(t.TempDir())
+	for _, body := range []string{"# one\n", "# two\n"} {
+		if _, err := caps.Add(model.CapabilityRecord{
+			Kind: model.CapabilityKindSkill,
+			Name: "review",
+		}, bytes.NewReader([]byte(body))); err != nil {
+			t.Fatalf("caps.Add: %v", err)
+		}
+	}
+	s := NewAgents(repo, runtime.NewRegistry(), caps)
+	_, err := s.Create(context.Background(), model.CreateAgentRequest{
+		Name:     "alpha",
+		Skills:   []model.CapabilityRef{{ID: model.CapabilityID("review"), Kind: model.CapabilityKindSkill}},
+		Runtimes: []model.RuntimePref{{Runtime: "fake"}},
+	})
+	if err == nil {
+		t.Fatal("expected ambiguous skill error")
+	}
+	se := AsError(err)
+	if se == nil || se.Code != CodeCapabilityConflict {
+		t.Fatalf("expected CAPABILITY_CONFLICT, got %T %v", err, err)
+	}
+	if repo.Exists("alpha") {
+		t.Fatal("agent should not be persisted when skill resolution fails")
+	}
+}
+
 func TestAgents_Show_RuntimeMappingProjection(t *testing.T) {
 	repo := agentstore.New(t.TempDir())
 	driver := &fakeDriver{
@@ -274,6 +356,36 @@ func TestAgents_Edit(t *testing.T) {
 	}
 	if a.Identity.Name != "alpha" || a.Identity.Description != desc || a.Identity.Role != "tester" {
 		t.Fatalf("got %+v", a.Identity)
+	}
+}
+
+func TestAgents_Edit_ResolvesSkillName(t *testing.T) {
+	repo := agentstore.New(t.TempDir())
+	caps := capstore.New(t.TempDir())
+	id, err := caps.Add(model.CapabilityRecord{
+		Kind: model.CapabilityKindSkill,
+		Name: "review",
+	}, bytes.NewReader([]byte("# review\n")))
+	if err != nil {
+		t.Fatalf("caps.Add: %v", err)
+	}
+	s := NewAgents(repo, runtime.NewRegistry(), caps)
+	if _, err := s.Create(context.Background(), model.CreateAgentRequest{
+		Name:     "alpha",
+		Runtimes: []model.RuntimePref{{Runtime: "fake"}},
+	}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	refs := []model.CapabilityRef{{ID: model.CapabilityID("review"), Kind: model.CapabilityKindSkill}}
+	agent, err := s.Edit(context.Background(), model.EditAgentRequest{
+		Name:   "alpha",
+		Skills: &refs,
+	})
+	if err != nil {
+		t.Fatalf("Edit: %v", err)
+	}
+	if len(agent.Skills) != 1 || agent.Skills[0].ID != id {
+		t.Fatalf("skills=%+v want %s", agent.Skills, id)
 	}
 }
 

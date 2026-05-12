@@ -21,6 +21,60 @@ import (
 	"github.com/xz1220/agent-vm/internal/infra/packageio"
 )
 
+type remappingCapStore struct {
+	inner capstore.Store
+	ids   []model.CapabilityID
+	next  int
+	recs  map[model.CapabilityID]model.CapabilityRecord
+}
+
+func newRemappingCapStore(inner capstore.Store, ids ...model.CapabilityID) *remappingCapStore {
+	return &remappingCapStore{inner: inner, ids: ids, recs: map[model.CapabilityID]model.CapabilityRecord{}}
+}
+
+func (s *remappingCapStore) List() ([]model.CapabilityRecord, error) {
+	out := make([]model.CapabilityRecord, 0, len(s.recs))
+	for _, rec := range s.recs {
+		out = append(out, rec)
+	}
+	return out, nil
+}
+
+func (s *remappingCapStore) Get(id model.CapabilityID) (model.CapabilityRecord, error) {
+	if rec, ok := s.recs[id]; ok {
+		return rec, nil
+	}
+	return s.inner.Get(id)
+}
+
+func (s *remappingCapStore) Add(rec model.CapabilityRecord, payload io.Reader) (model.CapabilityID, error) {
+	if s.next >= len(s.ids) {
+		return s.inner.Add(rec, payload)
+	}
+	id := s.ids[s.next]
+	s.next++
+	if _, err := io.ReadAll(payload); err != nil {
+		return "", err
+	}
+	full := rec
+	full.ID = id
+	s.recs[id] = full
+	return id, nil
+}
+
+func (s *remappingCapStore) Materialize(ids []model.CapabilityID, target string) error {
+	return s.inner.Materialize(ids, target)
+}
+
+func (s *remappingCapStore) ReadPayload(id model.CapabilityID) ([]byte, error) {
+	return s.inner.ReadPayload(id)
+}
+
+func (s *remappingCapStore) Remove(id model.CapabilityID) error {
+	delete(s.recs, id)
+	return s.inner.Remove(id)
+}
+
 // buildTestPkg writes a package zip to disk and returns the path.
 func buildTestPkg(t *testing.T, dir string, manifest *model.PackageManifest, files map[string][]byte) string {
 	t.Helper()
@@ -372,6 +426,275 @@ func TestPackages_Export_RoundTrip(t *testing.T) {
 	}
 	if got.Identity.Name != "alpha" {
 		t.Fatalf("agent=%+v", got.Identity)
+	}
+}
+
+func TestPackages_Export_UsesCapabilityNameDirectory(t *testing.T) {
+	agents := agentstore.New(t.TempDir())
+	caps := capstore.New(t.TempDir())
+	out := filepath.Join(t.TempDir(), "alpha.avm.zip")
+
+	reviewID, err := caps.Add(model.CapabilityRecord{
+		Kind:   model.CapabilityKindSkill,
+		Name:   "review",
+		Format: model.PayloadFormatSkillMD,
+	}, bytes.NewReader([]byte("# review\n")))
+	if err != nil {
+		t.Fatalf("add review: %v", err)
+	}
+	shipID, err := caps.Add(model.CapabilityRecord{
+		Kind:   model.CapabilityKindSkill,
+		Name:   "ship",
+		Format: model.PayloadFormatSkillMD,
+	}, bytes.NewReader([]byte("# ship\n")))
+	if err != nil {
+		t.Fatalf("add ship: %v", err)
+	}
+	if err := agents.Save(&model.Agent{
+		Identity: model.Identity{Name: "alpha"},
+		Skills: []model.CapabilityRef{
+			{ID: reviewID, Kind: model.CapabilityKindSkill},
+			{ID: shipID, Kind: model.CapabilityKindSkill},
+		},
+	}); err != nil {
+		t.Fatalf("save agent: %v", err)
+	}
+
+	pkgs := NewPackages(agents, caps, packageio.New())
+	res, err := pkgs.Export(context.Background(), model.ExportRequest{
+		Agent:         "alpha",
+		IncludeSkills: true,
+		OutputPath:    out,
+	})
+	if err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+	if len(res.Manifest.Capabilities) != 2 {
+		t.Fatalf("capabilities=%+v", res.Manifest.Capabilities)
+	}
+
+	want := map[string][]byte{
+		"capabilities/skill/review/SKILL.md": []byte("# review\n"),
+		"capabilities/skill/ship/SKILL.md":   []byte("# ship\n"),
+	}
+	seen := map[string]bool{}
+	pio := packageio.New()
+	mf, h, err := pio.Read(out)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	defer h.Close()
+	for _, blob := range mf.Capabilities {
+		body, ok := want[blob.Path]
+		if !ok {
+			t.Fatalf("unexpected capability path %q in manifest %+v", blob.Path, mf.Capabilities)
+		}
+		if seen[blob.Path] {
+			t.Fatalf("duplicate capability path %q", blob.Path)
+		}
+		seen[blob.Path] = true
+		rc, err := h.Open(blob.Path)
+		if err != nil {
+			t.Fatalf("open %s: %v", blob.Path, err)
+		}
+		got, err := io.ReadAll(rc)
+		rc.Close()
+		if err != nil {
+			t.Fatalf("read %s: %v", blob.Path, err)
+		}
+		if !bytes.Equal(got, body) {
+			t.Fatalf("payload %s = %q want %q", blob.Path, got, body)
+		}
+	}
+	if len(seen) != len(want) {
+		t.Fatalf("paths seen=%v want=%v", seen, want)
+	}
+}
+
+func TestPackages_Install_RewritesExportedSourceIDs(t *testing.T) {
+	srcAgents := agentstore.New(t.TempDir())
+	srcCaps := capstore.New(t.TempDir())
+	out := filepath.Join(t.TempDir(), "alpha.avm.zip")
+
+	reviewID, err := srcCaps.Add(model.CapabilityRecord{
+		Kind:   model.CapabilityKindSkill,
+		Name:   "review",
+		Format: model.PayloadFormatSkillMD,
+	}, bytes.NewReader([]byte("# review\n")))
+	if err != nil {
+		t.Fatalf("add review: %v", err)
+	}
+	shipID, err := srcCaps.Add(model.CapabilityRecord{
+		Kind:   model.CapabilityKindSkill,
+		Name:   "ship",
+		Format: model.PayloadFormatSkillMD,
+	}, bytes.NewReader([]byte("# ship\n")))
+	if err != nil {
+		t.Fatalf("add ship: %v", err)
+	}
+	if err := srcAgents.Save(&model.Agent{
+		Identity: model.Identity{Name: "alpha"},
+		Skills: []model.CapabilityRef{
+			{ID: reviewID, Kind: model.CapabilityKindSkill},
+			{ID: shipID, Kind: model.CapabilityKindSkill},
+		},
+		Runtimes: []model.RuntimePref{{Runtime: "codex"}},
+	}); err != nil {
+		t.Fatalf("save source agent: %v", err)
+	}
+
+	srcPkgs := NewPackages(srcAgents, srcCaps, packageio.New())
+	exported, err := srcPkgs.Export(context.Background(), model.ExportRequest{
+		Agent:         "alpha",
+		IncludeSkills: true,
+		OutputPath:    out,
+	})
+	if err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+	if len(exported.Manifest.Capabilities) != 2 {
+		t.Fatalf("manifest capabilities=%+v", exported.Manifest.Capabilities)
+	}
+	for _, blob := range exported.Manifest.Capabilities {
+		if blob.SourceID == "" {
+			t.Fatalf("missing source_id in blob %+v", blob)
+		}
+		if blob.Format != model.PayloadFormatSkillMD {
+			t.Fatalf("format=%q want %q in blob %+v", blob.Format, model.PayloadFormatSkillMD, blob)
+		}
+	}
+
+	dstAgents := agentstore.New(t.TempDir())
+	localReviewID := model.CapabilityID("cap_localreview000000000000000000")
+	localShipID := model.CapabilityID("cap_localship00000000000000000000")
+	dstCaps := newRemappingCapStore(capstore.New(t.TempDir()), localReviewID, localShipID)
+	dstPkgs := NewPackages(dstAgents, dstCaps, packageio.New())
+	res, err := dstPkgs.Install(context.Background(), model.InstallRequest{Source: out})
+	if err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	if len(res.ImportedCaps) != 2 {
+		t.Fatalf("ImportedCaps=%+v", res.ImportedCaps)
+	}
+	got, err := dstAgents.Get("alpha")
+	if err != nil {
+		t.Fatalf("Get installed agent: %v", err)
+	}
+	want := map[model.CapabilityID]bool{localReviewID: true, localShipID: true}
+	for _, ref := range got.Skills {
+		if !want[ref.ID] {
+			t.Fatalf("installed ref %s was not rewritten to local IDs; skills=%+v", ref.ID, got.Skills)
+		}
+		delete(want, ref.ID)
+	}
+	if len(want) != 0 {
+		t.Fatalf("missing local refs after install: %v", want)
+	}
+}
+
+func TestPackages_ExportInstall_MultiSkillRoundTrip(t *testing.T) {
+	srcAgents := agentstore.New(t.TempDir())
+	srcCaps := capstore.New(t.TempDir())
+	out := filepath.Join(t.TempDir(), "alpha.avm.zip")
+
+	skills := map[string][]byte{
+		"review":      []byte("# review\n"),
+		"investigate": []byte("# investigate\n"),
+		"ship":        []byte("# ship\n"),
+	}
+	var refs []model.CapabilityRef
+	for name, body := range skills {
+		id, err := srcCaps.Add(model.CapabilityRecord{
+			Kind:   model.CapabilityKindSkill,
+			Name:   name,
+			Format: model.PayloadFormatSkillMD,
+		}, bytes.NewReader(body))
+		if err != nil {
+			t.Fatalf("add %s: %v", name, err)
+		}
+		refs = append(refs, model.CapabilityRef{ID: id, Kind: model.CapabilityKindSkill})
+	}
+	if err := srcAgents.Save(&model.Agent{
+		Identity: model.Identity{Name: "alpha"},
+		Skills:   refs,
+		Runtimes: []model.RuntimePref{{Runtime: "codex"}},
+	}); err != nil {
+		t.Fatalf("save source agent: %v", err)
+	}
+
+	srcPkgs := NewPackages(srcAgents, srcCaps, packageio.New())
+	if _, err := srcPkgs.Export(context.Background(), model.ExportRequest{
+		Agent:         "alpha",
+		IncludeSkills: true,
+		OutputPath:    out,
+	}); err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+
+	pio := packageio.New()
+	mf, h, err := pio.Read(out)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	paths := map[string]bool{}
+	for _, blob := range mf.Capabilities {
+		if paths[blob.Path] {
+			t.Fatalf("duplicate capability path %q", blob.Path)
+		}
+		paths[blob.Path] = true
+		rc, err := h.Open(blob.Path)
+		if err != nil {
+			t.Fatalf("open %s: %v", blob.Path, err)
+		}
+		body, err := io.ReadAll(rc)
+		rc.Close()
+		if err != nil {
+			t.Fatalf("read %s: %v", blob.Path, err)
+		}
+		if !bytes.Equal(body, skills[blob.Name]) {
+			t.Fatalf("payload %s=%q want %q", blob.Name, body, skills[blob.Name])
+		}
+	}
+	if err := h.Close(); err != nil {
+		t.Fatalf("close package: %v", err)
+	}
+
+	dstAgents := agentstore.New(t.TempDir())
+	dstCaps := capstore.New(t.TempDir())
+	dstPkgs := NewPackages(dstAgents, dstCaps, packageio.New())
+	if _, err := dstPkgs.Install(context.Background(), model.InstallRequest{Source: out}); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	installed, err := dstAgents.Get("alpha")
+	if err != nil {
+		t.Fatalf("Get installed agent: %v", err)
+	}
+	if len(installed.Skills) != len(skills) {
+		t.Fatalf("installed skills=%+v", installed.Skills)
+	}
+	for _, ref := range installed.Skills {
+		rec, err := dstCaps.Get(ref.ID)
+		if err != nil {
+			t.Fatalf("installed ref %s not in capstore: %v", ref.ID, err)
+		}
+		body, err := dstCaps.ReadPayload(ref.ID)
+		if err != nil {
+			t.Fatalf("read installed payload %s: %v", ref.ID, err)
+		}
+		if !bytes.Equal(body, skills[rec.Name]) {
+			t.Fatalf("installed payload %s=%q want %q", rec.Name, body, skills[rec.Name])
+		}
+	}
+}
+
+func TestPackageCapabilityPath_EncodesUnsafeNameSegment(t *testing.T) {
+	got, err := packageCapabilityPath(model.CapabilityKindSkill, "../foo bar", "SKILL.md")
+	if err != nil {
+		t.Fatalf("packageCapabilityPath: %v", err)
+	}
+	want := "capabilities/skill/%2E%2E%2Ffoo%20bar/SKILL.md"
+	if got != want {
+		t.Fatalf("path=%q want %q", got, want)
 	}
 }
 

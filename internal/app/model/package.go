@@ -28,6 +28,8 @@ type PackageAgentRef struct {
 type PackageCapBlob struct {
 	Kind     CapabilityKind `yaml:"kind"     json:"kind"`
 	Name     string         `yaml:"name"     json:"name"`
+	SourceID CapabilityID   `yaml:"source_id,omitempty" json:"source_id,omitempty"`
+	Format   string         `yaml:"format,omitempty" json:"format,omitempty"`
 	Path     string         `yaml:"path"     json:"path"`
 	Checksum string         `yaml:"checksum" json:"checksum"`
 }

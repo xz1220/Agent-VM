@@ -87,7 +87,7 @@ func buildDeps() (cli.Deps, error) {
 	proc := process.New()
 
 	container := service.Container{
-		Agents:       service.NewAgents(agents, registry),
+		Agents:       service.NewAgents(agents, registry, caps),
 		Run:          service.NewRunner(agents, registry, writer, proc, log),
 		Packages:     service.NewPackages(agents, caps, pkgs),
 		Capabilities: service.NewCapabilities(caps, registry),

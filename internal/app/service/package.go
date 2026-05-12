@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -133,9 +134,11 @@ func (s *Packages) Install(ctx context.Context, req model.InstallRequest) (*mode
 		Renamed:  map[string]string{},
 	}
 
-	// Import capabilities first; remember (kind,name) → store ID so
-	// Agent CapabilityRefs can be rewritten to point at the AVM IDs.
-	capIDs := map[capKey]model.CapabilityID{}
+	// Import capabilities first; remember both source package IDs and
+	// legacy (kind,name) references so Agent CapabilityRefs can be
+	// rewritten to point at local AVM store IDs.
+	capIDsBySource := map[model.CapabilityID]model.CapabilityID{}
+	capIDsByName := map[capKey]model.CapabilityID{}
 	for _, blob := range manifest.Capabilities {
 		rc, err := h.Open(blob.Path)
 		if err != nil {
@@ -155,6 +158,7 @@ func (s *Packages) Install(ctx context.Context, req model.InstallRequest) (*mode
 			Name:       blob.Name,
 			Source:     model.SourcePackage,
 			ImportFrom: provenance,
+			Format:     blob.Format,
 		}
 		id, err := s.Caps.Add(rec, bytes.NewReader(payload))
 		if err != nil {
@@ -162,7 +166,10 @@ func (s *Packages) Install(ctx context.Context, req model.InstallRequest) (*mode
 				fmt.Sprintf("import capability %q: %v", blob.Name, err),
 				map[string]any{"name": blob.Name, "kind": string(blob.Kind)})
 		}
-		capIDs[capKey{blob.Kind, blob.Name}] = id
+		if blob.SourceID != "" {
+			capIDsBySource[blob.SourceID] = id
+		}
+		capIDsByName[capKey{blob.Kind, blob.Name}] = id
 		result.ImportedCaps = append(result.ImportedCaps, id)
 	}
 
@@ -191,8 +198,8 @@ func (s *Packages) Install(ctx context.Context, req model.InstallRequest) (*mode
 		// imported a matching (kind, name). Package authors typically
 		// reference capabilities by name in the YAML they ship; we
 		// look up by name and substitute the local content-addressed ID.
-		rewriteCapRefs(agent.Skills, capIDs)
-		rewriteCapRefs(agent.MCP, capIDs)
+		rewriteCapRefs(agent.Skills, capIDsBySource, capIDsByName)
+		rewriteCapRefs(agent.MCP, capIDsBySource, capIDsByName)
 
 		// Determine target Agent name and conflict handling.
 		target := agent.Identity.Name
@@ -341,7 +348,12 @@ func (s *Packages) Export(ctx context.Context, req model.ExportRequest) (*model.
 					fmt.Sprintf("read capability payload %s: %v", ref.ID, err),
 					map[string]any{"id": string(ref.ID)})
 			}
-			capPath := "capabilities/" + string(rec.Kind) + "/" + name
+			capPath, err := packageCapabilityPath(rec.Kind, rec.Name, name)
+			if err != nil {
+				return WrapError(CodeValidation, err,
+					fmt.Sprintf("package capability path for %s: %v", ref.ID, err),
+					map[string]any{"id": string(ref.ID)})
+			}
 			cw, werr := zw.Create(capPath)
 			if werr != nil {
 				return WrapError(CodeIOFailure, werr, "zip create: "+werr.Error(), nil)
@@ -353,6 +365,8 @@ func (s *Packages) Export(ctx context.Context, req model.ExportRequest) (*model.
 			manifest.Capabilities = append(manifest.Capabilities, model.PackageCapBlob{
 				Kind:     rec.Kind,
 				Name:     rec.Name,
+				SourceID: ref.ID,
+				Format:   rec.Format,
 				Path:     capPath,
 				Checksum: hex.EncodeToString(sum[:]),
 			})
@@ -383,13 +397,17 @@ func (s *Packages) Export(ctx context.Context, req model.ExportRequest) (*model.
 	return &model.ExportResult{Manifest: *manifest, Path: dst}, nil
 }
 
-// rewriteCapRefs replaces a CapabilityRef.ID with the imported store
-// ID when (kind, name-matching-Ref.ID) matches a recently imported
-// capability. Package authors typically reference caps by name — once
-// imported, those references must point at the local store.
-func rewriteCapRefs(refs []model.CapabilityRef, capIDs map[capKey]model.CapabilityID) {
+// rewriteCapRefs replaces a CapabilityRef.ID with the imported local
+// store ID. New packages carry the original source ID in the manifest;
+// old packages may still reference capabilities by name, so (kind,name)
+// remains a compatibility fallback.
+func rewriteCapRefs(refs []model.CapabilityRef, bySource map[model.CapabilityID]model.CapabilityID, byName map[capKey]model.CapabilityID) {
 	for i := range refs {
-		if id, ok := capIDs[capKey{refs[i].Kind, string(refs[i].ID)}]; ok {
+		if id, ok := bySource[refs[i].ID]; ok {
+			refs[i].ID = id
+			continue
+		}
+		if id, ok := byName[capKey{refs[i].Kind, string(refs[i].ID)}]; ok {
 			refs[i].ID = id
 		}
 	}
@@ -423,6 +441,38 @@ func readCapPayload(store capstore.Store, id model.CapabilityID, kind model.Capa
 		return data, e.Name(), nil
 	}
 	return nil, "", fmt.Errorf("packages: export: empty payload for %s", id)
+}
+
+// packageCapabilityPath returns the zip member path for one capability
+// payload. The logical capability name gets its own path segment so
+// multiple skills can each carry a SKILL.md without colliding.
+func packageCapabilityPath(kind model.CapabilityKind, name, payloadFile string) (string, error) {
+	if kind == "" {
+		return "", errors.New("empty capability kind")
+	}
+	if name == "" {
+		return "", errors.New("empty capability name")
+	}
+	if payloadFile == "" {
+		return "", errors.New("empty payload filename")
+	}
+	return "capabilities/" + string(kind) + "/" + packagePathSegment(name) + "/" + payloadFile, nil
+}
+
+func packagePathSegment(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if (c >= 'a' && c <= 'z') ||
+			(c >= 'A' && c <= 'Z') ||
+			(c >= '0' && c <= '9') ||
+			c == '-' || c == '_' {
+			b.WriteByte(c)
+			continue
+		}
+		b.WriteString(fmt.Sprintf("%%%02X", c))
+	}
+	return b.String()
 }
 
 // nextAvailableName walks name-1, name-2, ... until an unused slot.
